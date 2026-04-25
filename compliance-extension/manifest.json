@@ -1,0 +1,51 @@
+{
+  "manifest_version": 2,
+  "name": "ComplianceGuard",
+  "version": "1.1.0",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "complianceguard@extension",
+      "strict_min_version": "109.0"
+    }
+  },
+  "description": "AI-powered compliance checker for financial emails — adds disclaimers, flags GDPR issues, and ensures regulatory compliance.",
+  "icons": {
+    "48": "icons/icon48.png",
+    "96": "icons/icon96.png"
+  },
+  "permissions": [
+    "activeTab",
+    "storage",
+    "https://generativelanguage.googleapis.com/*",
+    "https://api.openai.com/*",
+    "https://api.anthropic.com/*",
+    "<all_urls>"
+  ],
+  "browser_action": {
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "48": "icons/icon48.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://mail.google.com/*",
+        "*://outlook.live.com/*",
+        "*://outlook.office.com/*",
+        "*://outlook.office365.com/*"
+      ],
+      "js": ["content/content.js"],
+      "css": ["content/content.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "background": {
+    "scripts": ["background/background.js"],
+    "persistent": false
+  },
+  "options_ui": {
+    "page": "options/options.html",
+    "browser_style": false
+  }
+}
