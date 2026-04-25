@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <title>ComplianceGuard Settings</title>
+  <title>WiseMail Settings</title>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -10,21 +10,21 @@
     body {
       background: #070b16;
       color: #cbd5e1;
-      font-family: 'IBM Plex Sans', sans-serif;
+      font-family: "IBM Plex Sans", sans-serif;
       font-size: 14px;
       min-height: 100vh;
     }
 
     .container {
-      max-width: 620px;
+      max-width: 920px;
       margin: 0 auto;
-      padding: 40px 24px;
+      padding: 40px 24px 72px;
     }
 
-    .header { margin-bottom: 40px; }
+    .header { margin-bottom: 32px; }
 
     .logo {
-      font-family: 'IBM Plex Mono', monospace;
+      font-family: "IBM Plex Mono", monospace;
       font-size: 22px;
       font-weight: 600;
       color: #3b82f6;
@@ -32,12 +32,12 @@
       margin-bottom: 6px;
     }
 
-    .tagline { font-size: 13px; color: #475569; }
+    .tagline { font-size: 13px; color: #64748b; max-width: 760px; line-height: 1.5; }
 
     .section {
       background: #0f172a;
       border: 1px solid #1e293b;
-      border-radius: 12px;
+      border-radius: 14px;
       padding: 24px;
       margin-bottom: 20px;
     }
@@ -48,7 +48,7 @@
       letter-spacing: 0.12em;
       text-transform: uppercase;
       color: #475569;
-      margin-bottom: 20px;
+      margin-bottom: 18px;
       padding-bottom: 10px;
       border-bottom: 1px solid #1e293b;
     }
@@ -58,11 +58,9 @@
 
     .field-row {
       display: grid;
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 14px;
-      margin-bottom: 0;
     }
-    .field-row .field { margin-bottom: 0; }
 
     label {
       display: block;
@@ -75,38 +73,49 @@
 
     input[type="password"],
     input[type="text"],
-    select {
+    select,
+    textarea {
       width: 100%;
-      padding: 10px 14px;
+      padding: 11px 14px;
       background: #080d1a;
       border: 1px solid #1e293b;
       border-radius: 8px;
       color: #e2e8f0;
-      font-family: 'IBM Plex Mono', monospace;
+      font-family: "IBM Plex Mono", monospace;
       font-size: 13px;
-      transition: border-color 0.15s;
+      transition: border-color 0.15s, box-shadow 0.15s;
       outline: none;
     }
 
-    input:focus, select:focus {
+    textarea {
+      min-height: 180px;
+      resize: vertical;
+      line-height: 1.55;
+    }
+
+    input:focus,
+    select:focus,
+    textarea:focus {
       border-color: #3b82f6;
-      box-shadow: 0 0 0 3px rgba(59,130,246,0.1);
+      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
     }
 
     .hint {
       font-size: 11px;
-      color: #334155;
-      margin-top: 5px;
-      line-height: 1.5;
+      color: #475569;
+      margin-top: 6px;
+      line-height: 1.6;
     }
+
     .hint a { color: #3b82f6; text-decoration: none; }
+
     .hint code {
       background: #1e293b;
       padding: 1px 5px;
-      border-radius: 3px;
+      border-radius: 4px;
       font-size: 10px;
-      font-family: 'IBM Plex Mono', monospace;
-      color: #94a3b8;
+      font-family: "IBM Plex Mono", monospace;
+      color: #bfdbfe;
     }
 
     .provider-tabs {
@@ -117,24 +126,35 @@
     }
 
     .provider-tab {
-      padding: 5px 14px;
+      padding: 6px 14px;
       background: #1e293b;
       border: 1px solid #334155;
       border-radius: 6px;
       font-size: 11px;
-      font-family: 'IBM Plex Mono', monospace;
+      font-family: "IBM Plex Mono", monospace;
       color: #64748b;
       cursor: pointer;
       transition: all 0.15s;
     }
+
     .provider-tab:hover { border-color: #475569; color: #94a3b8; }
+
     .provider-tab.active {
-      background: rgba(59,130,246,0.12);
+      background: rgba(59, 130, 246, 0.12);
       border-color: #1e3a5f;
       color: #93c5fd;
     }
 
-    .input-with-btn { display: flex; gap: 8px; }
+    .input-with-btn,
+    .section-actions,
+    .btn-row,
+    .skill-form-actions {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
     .input-with-btn input { flex: 1; }
 
     .ghost-btn {
@@ -142,23 +162,27 @@
       padding: 10px 12px;
       background: #1e293b;
       border: 1px solid #334155;
-      color: #64748b;
+      color: #94a3b8;
       border-radius: 8px;
       font-size: 11px;
-      font-family: 'IBM Plex Mono', monospace;
+      font-family: "IBM Plex Mono", monospace;
       cursor: pointer;
       transition: all 0.15s;
       white-space: nowrap;
     }
-    .ghost-btn:hover { border-color: #3b82f6; color: #93c5fd; }
+
+    .ghost-btn:hover { border-color: #3b82f6; color: #dbeafe; }
+    .danger-btn:hover { border-color: #ef4444; color: #fecaca; }
 
     .toggle-row {
       display: flex;
       align-items: center;
       justify-content: space-between;
+      gap: 16px;
       padding: 12px 0;
       border-bottom: 1px solid #1e293b;
     }
+
     .toggle-row:last-child { border-bottom: none; padding-bottom: 0; }
     .toggle-row:first-child { padding-top: 0; }
 
@@ -168,59 +192,186 @@
       color: #e2e8f0;
       margin-bottom: 2px;
     }
-    .toggle-info span { font-size: 11px; color: #475569; }
+
+    .toggle-info span {
+      font-size: 11px;
+      color: #64748b;
+      line-height: 1.45;
+    }
 
     .toggle { position: relative; width: 42px; height: 24px; flex-shrink: 0; }
     .toggle input { opacity: 0; width: 0; height: 0; }
+
     .toggle-slider {
       position: absolute;
-      top: 0; left: 0; right: 0; bottom: 0;
+      inset: 0;
       background: #1e293b;
       border-radius: 24px;
       cursor: pointer;
       transition: background 0.2s;
     }
+
     .toggle-slider::before {
-      content: '';
+      content: "";
       position: absolute;
-      width: 18px; height: 18px;
-      left: 3px; bottom: 3px;
+      width: 18px;
+      height: 18px;
+      left: 3px;
+      bottom: 3px;
       background: #475569;
       border-radius: 50%;
       transition: transform 0.2s, background 0.2s;
     }
+
     .toggle input:checked + .toggle-slider { background: #1e3a5f; }
+
     .toggle input:checked + .toggle-slider::before {
       transform: translateX(18px);
       background: #3b82f6;
     }
 
-    .regulations {
+    .stack { display: grid; gap: 14px; }
+
+    .skills-list { display: grid; gap: 12px; margin-bottom: 18px; }
+
+    .skill-card {
+      border: 1px solid #22304a;
+      border-radius: 12px;
+      padding: 14px;
+      background: linear-gradient(180deg, rgba(15, 23, 42, 0.9), rgba(10, 16, 30, 0.9));
+    }
+
+    .skill-card-muted { opacity: 0.72; }
+
+    .skill-card-top {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: flex-start;
+    }
+
+    .skill-card-title {
+      font-size: 14px;
+      color: #f8fafc;
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+
+    .skill-card-summary {
+      font-size: 12px;
+      color: #94a3b8;
+      line-height: 1.5;
+      max-width: 560px;
+    }
+
+    .skill-card-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .skill-meta,
+    .checkbox-grid {
       display: flex;
       flex-wrap: wrap;
       gap: 8px;
-      margin-top: 6px;
-    }
-    .reg-tag {
-      padding: 4px 10px;
-      background: #1e293b;
-      border-radius: 20px;
-      font-size: 11px;
-      font-family: monospace;
-      color: #64748b;
-      border: 1px solid #334155;
-    }
-    .reg-tag.active {
-      background: rgba(59,130,246,0.12);
-      border-color: #1e3a5f;
-      color: #93c5fd;
     }
 
-    .btn-row {
-      display: flex;
+    .skill-meta { margin-top: 12px; }
+
+    .mini-tag,
+    .checkbox-chip span {
+      display: inline-flex;
       align-items: center;
+      gap: 6px;
+      padding: 5px 10px;
+      border-radius: 999px;
+      border: 1px solid #334155;
+      background: #111827;
+      color: #94a3b8;
+      font-size: 11px;
+      font-family: "IBM Plex Mono", monospace;
+    }
+
+    .mini-tag-live {
+      border-color: #1d4ed8;
+      color: #bfdbfe;
+      background: rgba(29, 78, 216, 0.12);
+    }
+
+    .checkbox-chip {
+      position: relative;
+      cursor: pointer;
+    }
+
+    .checkbox-chip input {
+      position: absolute;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .checkbox-chip input:checked + span {
+      background: rgba(59, 130, 246, 0.14);
+      border-color: #2563eb;
+      color: #dbeafe;
+    }
+
+    .skill-form {
+      border: 1px solid #1e293b;
+      border-radius: 12px;
+      padding: 18px;
+      background: #0b1324;
+    }
+
+    .skill-form-header {
+      display: flex;
+      justify-content: space-between;
       gap: 12px;
-      margin-top: 8px;
+      align-items: center;
+      margin-bottom: 14px;
+    }
+
+    .skill-form-title {
+      color: #e2e8f0;
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+    }
+
+    .skill-form-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+      margin-bottom: 14px;
+    }
+
+    .inline-checks {
+      display: flex;
+      gap: 18px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .inline-checks label {
+      margin-bottom: 0;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: #cbd5e1;
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    .inline-checks input { accent-color: #3b82f6; }
+
+    .empty-state {
+      border: 1px dashed #334155;
+      border-radius: 12px;
+      padding: 18px;
+      color: #64748b;
+      text-align: center;
+      font-size: 12px;
     }
 
     .save-btn {
@@ -231,11 +382,12 @@
       border-radius: 8px;
       font-size: 13px;
       font-weight: 600;
-      font-family: 'IBM Plex Sans', sans-serif;
+      font-family: "IBM Plex Sans", sans-serif;
       cursor: pointer;
       transition: all 0.2s;
     }
-    .save-btn:hover { background: #2563eb; color: white; }
+
+    .save-btn:hover { background: #2563eb; color: #fff; }
 
     .saved-msg {
       font-size: 12px;
@@ -245,58 +397,64 @@
     }
 
     .hidden { display: none !important; }
+
+    @media (max-width: 760px) {
+      .container { padding: 24px 16px 48px; }
+      .field-row,
+      .skill-form-grid { grid-template-columns: 1fr; }
+      .skill-card-top { flex-direction: column; }
+      .skill-card-actions { justify-content: flex-start; }
+    }
   </style>
 </head>
 <body>
   <div class="container">
     <div class="header">
-      <div class="logo">⚖ ComplianceGuard</div>
-      <p class="tagline">AI-powered compliance checker for financial emails</p>
+      <div class="logo"><img src="../icons/logo.jpeg" alt="WiseMail" style="height:40px;width:auto;object-fit:contain;filter:brightness(0) invert(1);"></div>
+      <p class="tagline">
+        Configure provider, prompt and compliance skills. The extension will combine sender law,
+        counterparty law, EU rules when relevant, and any enabled internal policy skill.
+      </p>
     </div>
 
-    <!-- ── API Configuration ─────────────────────────── -->
     <div class="section">
       <div class="section-title">API Configuration</div>
 
       <div class="field">
-        <label>API Key</label>
+        <label for="apiKey">API Key</label>
         <input type="password" id="apiKey" placeholder="AIza…  or  sk-…" autocomplete="off" spellcheck="false">
         <p class="hint">
-          Google: <a href="https://makersuite.google.com/app/apikey" target="_blank">AI Studio →</a>
-          &nbsp;·&nbsp;
-          OpenAI: <a href="https://platform.openai.com/api-keys" target="_blank">platform.openai.com →</a>
-          &nbsp;·&nbsp;
-          Anthropic: <a href="https://console.anthropic.com/" target="_blank">console.anthropic.com →</a>
+          Google: <a href="https://makersuite.google.com/app/apikey" target="_blank">AI Studio</a>
+          · OpenAI: <a href="https://platform.openai.com/api-keys" target="_blank">platform.openai.com</a>
+          · Anthropic: <a href="https://console.anthropic.com/" target="_blank">console.anthropic.com</a>
         </p>
       </div>
 
       <div class="field">
         <label>Provider</label>
         <div class="provider-tabs" id="provider-tabs">
-          <button class="provider-tab" data-provider="google">Google</button>
-          <button class="provider-tab" data-provider="openai">OpenAI</button>
-          <button class="provider-tab" data-provider="anthropic">Anthropic</button>
-          <button class="provider-tab" data-provider="custom">Custom</button>
+          <button class="provider-tab" data-provider="google" type="button">Google</button>
+          <button class="provider-tab" data-provider="openai" type="button">OpenAI</button>
+          <button class="provider-tab" data-provider="anthropic" type="button">Anthropic</button>
+          <button class="provider-tab" data-provider="custom" type="button">Custom</button>
         </div>
       </div>
 
       <div class="field">
-        <label>Endpoint URL</label>
+        <label for="endpoint">Endpoint URL</label>
         <div class="input-with-btn">
           <input type="text" id="endpoint" spellcheck="false" placeholder="https://…">
-          <button class="ghost-btn" id="reset-endpoint">↺ Default</button>
+          <button class="ghost-btn" id="reset-endpoint" type="button">↺ Default</button>
         </div>
-        <p class="hint">
-          Use <code>{model}</code> as a placeholder — it's replaced with the model name at call time (Google format).
-        </p>
+        <p class="hint">Use <code>{model}</code> as a placeholder for Google-style endpoints.</p>
       </div>
 
       <div class="field-row">
         <div class="field">
-          <label>Model</label>
+          <label for="modelPreset">Model</label>
           <select id="modelPreset">
             <optgroup label="── Gemini 3.x ──">
-              <option value="gemini-3.1-flash-lite-preview">Gemini 3.1 Flash-Lite Preview (défaut)</option>
+              <option value="gemini-3.1-flash-lite-preview">Gemini 3.1 Flash-Lite Preview</option>
               <option value="gemini-3.1-pro-preview">Gemini 3.1 Pro Preview</option>
               <option value="gemini-3-flash-preview">Gemini 3 Flash Preview</option>
             </optgroup>
@@ -322,55 +480,113 @@
           </select>
         </div>
         <div class="field hidden" id="custom-model-wrap">
-          <label>Custom Model Name</label>
-          <input type="text" id="customModel" placeholder="e.g. my-fine-tuned-model" spellcheck="false">
+          <label for="customModel">Custom Model Name</label>
+          <input type="text" id="customModel" placeholder="my-fine-tuned-model" spellcheck="false">
         </div>
       </div>
     </div>
 
-    <!-- ── Jurisdiction ──────────────────────────────── -->
     <div class="section">
-      <div class="section-title">Jurisdiction &amp; Regulations</div>
-
-      <div class="field">
-        <label>Primary Jurisdiction</label>
-        <select id="jurisdiction">
-          <option value="FR">🇫🇷  France (AMF, ACPR, CMF, RGPD)</option>
-          <option value="EU">🇪🇺  Union européenne (MIF II, RGPD)</option>
-          <option value="US">🇺🇸  États-Unis (SEC, FINRA)</option>
-          <option value="UK">🇬🇧  Royaume-Uni (FCA)</option>
-          <option value="AU">🇦🇺  Australie (ASIC)</option>
-          <option value="Global">🌐  Global (toutes réglementations)</option>
-        </select>
-        <p class="hint">L'IA appliquera en priorité les règles de cette juridiction tout en signalant les problèmes critiques des autres.</p>
-      </div>
-
-      <div class="field">
-        <label>Regulations Checked</label>
-        <div class="regulations">
-          <span class="reg-tag active">AMF</span>
-          <span class="reg-tag active">ACPR</span>
-          <span class="reg-tag active">MIF II</span>
-          <span class="reg-tag active">RGPD</span>
-          <span class="reg-tag active">CMF L533</span>
-          <span class="reg-tag active">LCB-FT</span>
-          <span class="reg-tag active">PRIIPS</span>
-          <span class="reg-tag active">Performances passées</span>
-          <span class="reg-tag active">Avertissements risques</span>
-          <span class="reg-tag">SEC Rule 156</span>
-          <span class="reg-tag">FCA COBS</span>
+      <div class="section-title">Jurisdiction Routing</div>
+      <div class="field-row">
+        <div class="field">
+          <label for="jurisdiction">Sender / Primary Jurisdiction</label>
+          <select id="jurisdiction"></select>
+          <p class="hint">This is the sender-side legal base. If you pick France, the extension also loads EU-level rules automatically.</p>
+        </div>
+        <div class="field">
+          <label for="counterpartyJurisdiction">Counterparty Jurisdiction</label>
+          <select id="counterpartyJurisdiction"></select>
+          <p class="hint">Use this when the recipient country cannot be inferred from the email domain. Example: FR sender + US recipient ⇒ FR + EU + US skills.</p>
         </div>
       </div>
     </div>
 
-    <!-- ── Behavior ──────────────────────────────────── -->
+    <div class="section">
+      <div class="section-title">System Prompt</div>
+      <div class="field">
+        <label for="systemPrompt">Base System Prompt</label>
+        <textarea id="systemPrompt" spellcheck="false"></textarea>
+        <p class="hint">
+          This is the editable base prompt. WiseMail still appends a fixed JSON/output contract so the UI keeps working.
+          Keep instructions compatible with issue-level fixes and multi-skill reasoning.
+        </p>
+      </div>
+      <div class="section-actions">
+        <button class="ghost-btn" id="reset-system-prompt" type="button">Restore Default Prompt</button>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">Compliance Skills</div>
+      <div class="stack">
+        <p class="hint">
+          Built-in law skills cover FR, EU, US, UK, AU and cross-border logic. Create policy skills for internal company rules, approval flows,
+          forbidden claims, mandatory signatures or product restrictions. Enabled policy skills marked as “always include” are added to every scan.
+        </p>
+
+        <div class="section-actions">
+          <button class="ghost-btn" id="restore-skills-btn" type="button">Restore Built-in Skills</button>
+        </div>
+
+        <div class="skills-list" id="skills-list"></div>
+
+        <div class="skill-form">
+          <input type="hidden" id="skillId">
+          <div class="skill-form-header">
+            <div class="skill-form-title" id="skill-form-title">Create / Update Skill</div>
+          </div>
+
+          <div class="skill-form-grid">
+            <div class="field">
+              <label for="skillName">Skill Name</label>
+              <input type="text" id="skillName" placeholder="Internal policy - Wealth Management">
+            </div>
+            <div class="field">
+              <label for="skillType">Skill Type</label>
+              <select id="skillType">
+                <option value="policy">Policy</option>
+                <option value="law">Law</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="skillSummary">Short Summary</label>
+            <input type="text" id="skillSummary" placeholder="Applied to outbound emails for US retail investors.">
+          </div>
+
+          <div class="field">
+            <label>Apply on Matching Jurisdictions</label>
+            <div class="checkbox-grid" id="skill-jurisdictions"></div>
+            <p class="hint">Leave all jurisdictions empty and turn on “Always include” for a global internal policy.</p>
+          </div>
+
+          <div class="field">
+            <label for="skillContent">Skill Content</label>
+            <textarea id="skillContent" spellcheck="false" placeholder="Write the actual compliance rules the AI must enforce."></textarea>
+          </div>
+
+          <div class="field inline-checks">
+            <label><input type="checkbox" id="skillEnabled" checked> Enabled</label>
+            <label><input type="checkbox" id="skillAlwaysApply" checked> Always include</label>
+          </div>
+
+          <div class="skill-form-actions">
+            <button class="save-btn" id="skill-save-btn" type="button">Add Skill</button>
+            <button class="ghost-btn" id="skill-cancel-btn" type="button">Clear Form</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div class="section">
       <div class="section-title">Behavior</div>
 
       <div class="toggle-row">
         <div class="toggle-info">
-          <strong>Auto-scan on compose open</strong>
-          <span>Automatically scan when you open a new compose window</span>
+          <strong>Auto-scan after typing pause</strong>
+          <span>When the user stops typing, the compose window is analysed automatically.</span>
         </div>
         <label class="toggle">
           <input type="checkbox" id="autoScan">
@@ -381,7 +597,7 @@
       <div class="toggle-row">
         <div class="toggle-info">
           <strong>Show panel on scan</strong>
-          <span>Display results panel in the email interface</span>
+          <span>Display the draggable analysis panel when a scan completes.</span>
         </div>
         <label class="toggle">
           <input type="checkbox" id="showPanel" checked>
@@ -391,11 +607,13 @@
     </div>
 
     <div class="btn-row">
-      <button class="save-btn" id="save-btn">Save Settings</button>
+      <button class="save-btn" id="save-btn" type="button">Save Settings</button>
       <span class="saved-msg" id="saved-msg">✓ Settings saved</span>
     </div>
   </div>
 
+  <script src="../background/system-prompt.js"></script>
+  <script src="../background/skills-library.js"></script>
   <script src="options.js"></script>
 </body>
 </html>

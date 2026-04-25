@@ -1,37 +1,67 @@
 /**
- * content.js — Script injecté dans Gmail (et Outlook) par ComplianceGuard
+ * content.js — Script injected into Gmail (and Outlook) by WiseMail
  *
- * Rôle : surveiller la fenêtre de composition, déclencher les analyses
- * de conformité et afficher les résultats sans perturber l'interface Gmail.
+ * Responsibilities:
+ *   - Monitor the compose window, trigger compliance analyses,
+ *     and display results without disrupting the Gmail interface.
  *
- * Deux modes de déclenchement :
- *   1. Automatique — l'utilisateur s'arrête de taper pendant 2 secondes :
- *      un toast compact apparaît avec les problèmes détectés et un bouton
- *      "Corriger" pour appliquer la version corrigée en un clic.
- *   2. Manuel — clic sur le bouton "Conformité" dans la barre d'outils
- *      ou raccourci Alt+Maj+C : ouvre le panneau complet de détails.
+ * Two trigger modes:
+ *   1. Automatic — user stops typing for 2 seconds: a compact toast appears
+ *      with detected issues and a "Fix" button to apply the corrected version.
+ *   2. Manual — click the "Compliance" toolbar button or press Alt+Shift+C:
+ *      opens the full detail panel.
  *
- * Architecture :
- *   - Un MutationObserver surveille le DOM pour détecter l'ouverture
- *     d'une fenêtre de composition (Gmail les crée dynamiquement).
- *   - Toute communication avec l'IA passe par browser.runtime.sendMessage
- *     vers background.js (seul contexte autorisé à faire des requêtes réseau).
+ * Attachment scanning:
+ *   - File inputs in the compose area are intercepted when they change.
+ *   - PDFs are parsed with a basic text extractor (BT/ET blocks).
+ *   - Extracted text is sent to the AI alongside the email body.
+ *   - Read failures are shown as warnings in the results panel.
+ *
+ * Architecture:
+ *   - A MutationObserver watches the DOM for compose windows and file inputs
+ *     (both are created dynamically by Gmail).
+ *   - The compose close is detected by the same observer: when the compose
+ *     element disappears, the panel and toast are dismissed automatically.
+ *   - When an in-panel fix is applied, a background re-analysis runs silently
+ *     and replaces the panel results when ready (no loading flash).
+ *   - All AI communication goes via browser.runtime.sendMessage to background.js.
  */
 
 (function () {
   "use strict";
 
-  // ─── État global du script ────────────────────────────────────────────────
+  // ─── Global state ─────────────────────────────────────────────────────────
 
-  let activePanel = null;     // Référence au div du panneau complet (null si fermé)
-  let activeToast = null;     // Référence au div du toast de suggestion (null si fermé)
-  let debounceTimer = null;   // Timer du debounce de frappe (2 secondes)
-  let lastAnalyzedText = "";  // Dernier texte envoyé à l'analyse, pour éviter les doublons
-  let isAnalyzing = false;    // Verrou pour ne pas lancer deux analyses en parallèle
+  let activePanel = null;
+  let activeToast = null;
+  let debounceTimer = null;
+  let lastAnalyzedText = "";
+  let lastFixedText = "";           // Text snapshot right after a fix was applied
+  let isAnalyzing = false;
   let panelManualPosition = null;
-  const highlightedIssueSpans = new Map();
+  let composeCloseTimer = null;    // Debounce for compose-close detection
+  let backgroundRescanRunning = false;
 
-  const COMPOSE_SELECTOR = '[role="textbox"][aria-label*="Message Body"], [g_editable="true"], .Am.Al.editable';
+  const highlightedIssueSpans = new Map();
+  // fileName → { text: string, error: string|null, size: number }
+  const attachmentContent = new Map();
+
+  const COMPOSE_SELECTOR = [
+    // Gmail
+    '[role="textbox"][aria-label*="Message Body"]',
+    '[g_editable="true"]',
+    '.Am.Al.editable',
+    // Outlook Web — all variants (EN + FR aria-labels)
+    '[aria-label*="Message body"][contenteditable="true"]',
+    '[aria-label*="message body"][contenteditable="true"]',
+    '[aria-label*="Corps du message"][contenteditable="true"]',
+    '[aria-label*="corps du message"][contenteditable="true"]',
+    'div[data-testid="compose-body-editor"]',
+    '.dFCbN[contenteditable="true"]',
+    // New Outlook (cloud.microsoft) — generic fallback inside compose pane
+    '.ReadingPaneContent [contenteditable="true"]',
+    '[class*="compose"] [contenteditable="true"]',
+  ].join(", ");
 
   function getComposeElement() {
     return document.querySelector(COMPOSE_SELECTOR);
@@ -50,11 +80,20 @@
 
   function getSubjectField() {
     const composeContainer = getComposeContainer();
-    if (!composeContainer) return null;
+    const root = composeContainer || document;
     return (
-      composeContainer.querySelector('input[name="subjectbox"]') ||
-      composeContainer.querySelector('input[placeholder="Objet"]') ||
-      composeContainer.querySelector('input[placeholder="Subject"]')
+      // Gmail
+      root.querySelector('input[name="subjectbox"]') ||
+      root.querySelector('input[placeholder="Objet"]') ||
+      root.querySelector('input[placeholder="Subject"]') ||
+      // Outlook Web (classic + new, EN + FR)
+      root.querySelector('input[aria-label="Add a subject"]') ||
+      root.querySelector('input[aria-label="Ajouter un objet"]') ||
+      root.querySelector('input[placeholder*="subject" i]') ||
+      root.querySelector('input[placeholder*="objet" i]') ||
+      document.querySelector('input[data-testid="compose-subject-input"]') ||
+      document.querySelector('input[aria-label="Add a subject"]') ||
+      document.querySelector('input[aria-label="Ajouter un objet"]')
     );
   }
 
@@ -65,7 +104,6 @@
   function setSubjectText(subjectText) {
     const subjectField = getSubjectField();
     if (!subjectField || !subjectText) return;
-
     subjectField.focus();
     subjectField.value = subjectText;
     subjectField.dispatchEvent(new Event("input", { bubbles: true }));
@@ -92,18 +130,11 @@
     panel.style.top = `${safePosition.top}px`;
     panel.style.right = "auto";
     panel.style.bottom = "auto";
-    if (persist) {
-      panelManualPosition = safePosition;
-    }
+    if (persist) panelManualPosition = safePosition;
   }
 
   function rectanglesOverlap(a, b) {
-    return !(
-      a.right <= b.left ||
-      a.left >= b.right ||
-      a.bottom <= b.top ||
-      a.top >= b.bottom
-    );
+    return !(a.right <= b.left || a.left >= b.right || a.bottom <= b.top || a.top >= b.bottom);
   }
 
   function choosePanelPosition(panel) {
@@ -115,7 +146,6 @@
       left: Math.max(margin, window.innerWidth - panelWidth - margin),
       top: Math.max(88, window.innerHeight - panelHeight - 96)
     };
-
     if (!composeContainer) return fallback;
 
     const rect = composeContainer.getBoundingClientRect();
@@ -129,37 +159,20 @@
       fallback
     ];
 
-    const composeRect = {
-      left: rect.left,
-      top: rect.top,
-      right: rect.right,
-      bottom: rect.bottom
-    };
-
+    const composeRect = { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom };
     let best = null;
     for (const candidate of candidates) {
       const safe = clampPanelPosition(panel, candidate);
-      const panelRect = {
-        left: safe.left,
-        top: safe.top,
-        right: safe.left + panelWidth,
-        bottom: safe.top + panelHeight
-      };
+      const panelRect = { left: safe.left, top: safe.top, right: safe.left + panelWidth, bottom: safe.top + panelHeight };
       const overlapsCompose = rectanglesOverlap(panelRect, composeRect);
       const score = overlapsCompose ? 100 + (candidate.priority || 0) : (candidate.priority || 0);
-      if (!best || score < best.score) {
-        best = { score, position: safe };
-      }
+      if (!best || score < best.score) best = { score, position: safe };
     }
-
     return best?.position || fallback;
   }
 
   function positionPanel(panel) {
-    if (panelManualPosition) {
-      applyPanelPosition(panel, panelManualPosition);
-      return;
-    }
+    if (panelManualPosition) { applyPanelPosition(panel, panelManualPosition); return; }
     applyPanelPosition(panel, choosePanelPosition(panel));
   }
 
@@ -177,28 +190,187 @@
       const offsetY = event.clientY - rect.top;
       panel.classList.add("cg-panel-dragging");
 
-      const onMove = (moveEvent) => {
-        applyPanelPosition(panel, {
-          left: moveEvent.clientX - offsetX,
-          top: moveEvent.clientY - offsetY
-        }, true);
-      };
-
+      const onMove = (e) => applyPanelPosition(panel, { left: e.clientX - offsetX, top: e.clientY - offsetY }, true);
       const onUp = () => {
         panel.classList.remove("cg-panel-dragging");
         document.removeEventListener("pointermove", onMove);
         document.removeEventListener("pointerup", onUp);
       };
-
       document.addEventListener("pointermove", onMove);
       document.addEventListener("pointerup", onUp);
       event.preventDefault();
     });
   }
 
+  // ─── PDF text extraction ──────────────────────────────────────────────────
+
+  /**
+   * Extracts plain text from a PDF ArrayBuffer using the BT/ET operator approach.
+   * Works for PDFs with standard Type 1 / TrueType text encoding.
+   * Returns an empty string for scanned images or encrypted documents.
+   */
+  function extractTextFromPDFBuffer(buffer) {
+    let raw;
+    try {
+      // new Uint8Array(buffer) clones into content-script compartment to avoid Firefox Xray errors
+      raw = new TextDecoder("latin1").decode(new Uint8Array(new Uint8Array(buffer)));
+    } catch {
+      return "";
+    }
+
+    const parts = [];
+    const btEtRegex = /BT\s([\s\S]*?)ET/g;
+    let block;
+    while ((block = btEtRegex.exec(raw)) !== null) {
+      // Match (string)Tj  or  [(string)]TJ  operators
+      const tjRegex = /\(([^)\\]*(?:\\.[^)\\]*)*)\)\s*Tj|\[([^\]]*)\]\s*TJ/g;
+      let match;
+      while ((match = tjRegex.exec(block[1])) !== null) {
+        const raw2 = match[1] || match[2] || "";
+        const decoded = raw2
+          .replace(/\\n/g, " ").replace(/\\r/g, " ").replace(/\\t/g, " ")
+          .replace(/\\\(/g, "(").replace(/\\\)/g, ")").replace(/\\\\/g, "\\")
+          .replace(/\\(\d{3})/g, (_, oct) => String.fromCharCode(parseInt(oct, 8)));
+        if (decoded.trim()) parts.push(decoded.trim());
+      }
+    }
+
+    return parts.join(" ").replace(/\s+/g, " ").trim();
+  }
+
+  // ─── Attachment interception ──────────────────────────────────────────────
+
+  async function extractTextFromDocx(buffer) {
+    // Clone buffer into content-script compartment to avoid Firefox Xray wrapper errors
+    const raw = new Uint8Array(new Uint8Array(buffer));
+    const target = "word/document.xml";
+    let pos = 0;
+
+    while (pos < raw.length - 30) {
+      // ZIP local file header: PK\x03\x04
+      if (raw[pos] !== 0x50 || raw[pos+1] !== 0x4b || raw[pos+2] !== 0x03 || raw[pos+3] !== 0x04) {
+        pos++; continue;
+      }
+      const compMethod = raw[pos+8]  | (raw[pos+9]  << 8);
+      const compSize   = raw[pos+18] | (raw[pos+19] << 8) | (raw[pos+20] << 16) | (raw[pos+21] << 24);
+      const nameLen    = raw[pos+26] | (raw[pos+27] << 8);
+      const extraLen   = raw[pos+28] | (raw[pos+29] << 8);
+      const nameStart  = pos + 30;
+      const fileName   = new TextDecoder().decode(raw.slice(nameStart, nameStart + nameLen));
+      const dataStart  = nameStart + nameLen + extraLen;
+
+      if (fileName === target) {
+        const compData = raw.slice(dataStart, dataStart + compSize);
+        let xml = "";
+
+        if (compMethod === 0) {
+          // Stored (uncompressed)
+          xml = new TextDecoder().decode(compData);
+        } else if (compMethod === 8) {
+          // DEFLATE — decompress with native DecompressionStream
+          try {
+            const ds = new DecompressionStream("deflate-raw");
+            const writer = ds.writable.getWriter();
+            writer.write(compData);
+            writer.close();
+            const chunks = [];
+            const reader = ds.readable.getReader();
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              chunks.push(value);
+            }
+            const total = chunks.reduce((n, c) => n + c.length, 0);
+            const out = new Uint8Array(total);
+            let off = 0;
+            for (const c of chunks) { out.set(c, off); off += c.length; }
+            xml = new TextDecoder().decode(out);
+          } catch {
+            return "";
+          }
+        }
+
+        // Strip XML tags and normalise whitespace
+        return xml.replace(/<\/w:p>/gi, "\n")
+                  .replace(/<[^>]+>/g, " ")
+                  .replace(/\s+/g, " ")
+                  .trim();
+      }
+      pos = dataStart + Math.max(compSize, 1);
+    }
+    return "";
+  }
+
+  async function processAttachment(file) {
+    const name = file.name;
+    const ext  = name.split(".").pop().toLowerCase();
+
+    try {
+      // Clone ArrayBuffer into content-script compartment before processing
+      const rawBuffer = await file.arrayBuffer();
+      const buffer = rawBuffer.slice(0);
+
+      if (ext === "pdf" || file.type === "application/pdf") {
+        const text = extractTextFromPDFBuffer(buffer);
+        if (text.length > 20) {
+          attachmentContent.set(name, { text, error: null, size: file.size });
+        } else {
+          attachmentContent.set(name, { text: "", error: "No extractable text — PDF may be scanned or image-based (text layer not found)", size: file.size });
+        }
+
+      } else if (ext === "txt" || file.type === "text/plain") {
+        const text = await file.text();
+        attachmentContent.set(name, { text: text.slice(0, 20000), error: null, size: file.size });
+
+      } else if (ext === "csv" || file.type === "text/csv") {
+        const text = await file.text();
+        attachmentContent.set(name, { text: text.slice(0, 10000), error: null, size: file.size });
+
+      } else if (ext === "docx" || file.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
+        const text = await extractTextFromDocx(buffer);
+        if (text.length > 20) {
+          attachmentContent.set(name, { text: text.slice(0, 20000), error: null, size: file.size });
+        } else {
+          attachmentContent.set(name, { text: "", error: "Could not extract text from this Word document (may be encrypted or image-based)", size: file.size });
+        }
+
+      } else {
+        // Register unsupported type so the AI knows the file exists
+        attachmentContent.set(name, { text: "", error: `Format .${ext} not supported for text extraction`, size: file.size });
+      }
+    } catch (err) {
+      attachmentContent.set(name, { text: "", error: `Read error: ${err.message}`, size: file.size });
+    }
+
+    // Re-run analysis now that attachment content has changed
+    const emailText = extractEmailText();
+    if (emailText && emailText.trim().length >= 20) {
+      triggerBackgroundRescan();
+    }
+  }
+
+  function hookFileInput(input) {
+    if (input.dataset.cgHooked) return;
+    input.dataset.cgHooked = "true";
+    input.addEventListener("change", () => {
+      Array.from(input.files || []).forEach(processAttachment);
+    });
+  }
+
+  /** Returns attachment data formatted for the AI prompt. */
+  function getAttachmentsForAnalysis() {
+    return Array.from(attachmentContent.entries()).map(([name, data]) => ({
+      name,
+      text: data.text,
+      error: data.error,
+    }));
+  }
+
+  // ─── Inline issue highlighting ────────────────────────────────────────────
+
   function normalizeIssueQuote(quote) {
     return (quote || "")
-      .replace(/^[\s"'“”«»]+|[\s"'“”«»]+$/g, "")
+      .replace(/^[\s"'""«»]+|[\s"'""«»]+$/g, "")
       .replace(/\s+/g, " ")
       .trim();
   }
@@ -207,7 +379,7 @@
     const trimmed = (quote || "").trim();
     const normalized = normalizeIssueQuote(quote);
     const variants = new Set([trimmed, normalized]);
-    return [...variants].filter((variant) => variant && variant.length >= 4);
+    return [...variants].filter((v) => v && v.length >= 4);
   }
 
   function rememberHighlightedSpan(issueIndex, span) {
@@ -249,15 +421,12 @@
         fragment.appendChild(document.createTextNode(original.slice(cursor)));
         break;
       }
-
-      if (matchIndex > cursor) {
-        fragment.appendChild(document.createTextNode(original.slice(cursor, matchIndex)));
-      }
+      if (matchIndex > cursor) fragment.appendChild(document.createTextNode(original.slice(cursor, matchIndex)));
 
       const span = document.createElement("span");
       span.className = `cg-inline-issue cg-inline-issue-${issue.severity || "warning"}`;
       span.dataset.issueIndex = String(issueIndex);
-      span.title = issue.description || "Problème de conformité";
+      span.title = issue.description || "Compliance issue";
       span.textContent = original.slice(matchIndex, matchIndex + matchLength);
       fragment.appendChild(span);
       rememberHighlightedSpan(issueIndex, span);
@@ -268,7 +437,6 @@
     }
 
     if (!hasMatch) return 0;
-
     textNode.parentNode.replaceChild(fragment, textNode);
     return matchCount;
   }
@@ -276,7 +444,6 @@
   function highlightIssueQuote(issue, issueIndex) {
     const compose = getComposeElement();
     if (!compose) return 0;
-
     const variants = getIssueQuoteVariants(issue.quote);
     if (!variants.length) return 0;
 
@@ -290,36 +457,30 @@
 
     const textNodes = [];
     let currentNode;
-    while ((currentNode = walker.nextNode())) {
-      textNodes.push(currentNode);
-    }
+    while ((currentNode = walker.nextNode())) textNodes.push(currentNode);
 
-    let highlightedCount = 0;
-    for (const textNode of textNodes) {
-      if (!textNode.parentNode) continue;
-      highlightedCount += wrapIssueMatchesInTextNode(textNode, issue, issueIndex, variants);
+    let count = 0;
+    for (const node of textNodes) {
+      if (!node.parentNode) continue;
+      count += wrapIssueMatchesInTextNode(node, issue, issueIndex, variants);
     }
-    return highlightedCount;
+    return count;
   }
 
   function highlightIssuesInCompose(result) {
     clearInlineHighlights();
-
     const issues = (result?.issues || [])
       .map((issue, index) => ({ issue, index, quote: normalizeIssueQuote(issue.quote) }))
       .filter(({ quote }) => quote.length >= 4)
       .sort((a, b) => b.quote.length - a.quote.length);
-
-    for (const { issue, index } of issues) {
-      highlightIssueQuote(issue, index);
-    }
+    for (const { issue, index } of issues) highlightIssueQuote(issue, index);
   }
 
   function focusIssueInCompose(issueIndex) {
     const key = String(issueIndex);
     const compose = getComposeElement();
-    const target = (highlightedIssueSpans.get(key) || []).find((span) => span.isConnected);
-    if (!compose || !target) return;
+    const target = (highlightedIssueSpans.get(key) || []).find((s) => s.isConnected);
+    if (!compose || !target) return false;
 
     target.classList.remove("cg-inline-issue-pulse");
     void target.offsetWidth;
@@ -332,200 +493,263 @@
     range.selectNodeContents(target);
     selection.removeAllRanges();
     selection.addRange(range);
+    return true;
   }
+
+  // ─── Correction helpers ───────────────────────────────────────────────────
 
   function parseCorrectedEmailParts(resultOrText) {
     const result = typeof resultOrText === "string"
       ? { correctedEmail: resultOrText }
       : (resultOrText || {});
-
     let subject = (result.correctedSubject || "").trim();
     let body = (result.correctedEmail || "").trim();
-
-    if (!body) {
-      return { subject, body: "" };
-    }
+    if (!body) return { subject, body: "" };
 
     const explicitSubjectMatch = body.match(/^\s*(?:Objet|Subject)\s*:\s*(.+)\n+/i);
     if (explicitSubjectMatch) {
-      if (!subject) {
-        subject = explicitSubjectMatch[1].trim();
-      }
+      if (!subject) subject = explicitSubjectMatch[1].trim();
       body = body.slice(explicitSubjectMatch[0].length).trim();
     }
-
     return { subject, body };
   }
 
-  // ─── Détection du client mail ─────────────────────────────────────────────
+  function replaceFirstLiteralMatch(sourceText, needle, replacementText) {
+    const index = sourceText.indexOf(needle);
+    if (index === -1) return null;
+    return sourceText.slice(0, index) + replacementText + sourceText.slice(index + needle.length);
+  }
 
-  /** Identifie Gmail ou Outlook à partir du hostname courant. */
+  function replaceIssueInSubject(issue, replacementText) {
+    const subjectField = getSubjectField();
+    if (!subjectField) return false;
+    const current = subjectField.value || "";
+    for (const variant of getIssueQuoteVariants(issue.quote)) {
+      const updated = replaceFirstLiteralMatch(current, variant, replacementText);
+      if (updated !== null) { setSubjectText(updated); return true; }
+    }
+    return false;
+  }
+
+  function replaceHighlightedIssue(issueIndex, replacementText) {
+    const key = String(issueIndex);
+    const target = (highlightedIssueSpans.get(key) || []).find((s) => s.isConnected);
+    const compose = getComposeElement();
+    if (!target || !compose) return false;
+
+    compose.focus();
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(target);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    const replaced = document.execCommand("insertText", false, replacementText);
+    selection.removeAllRanges();
+    if (replaced || !target.isConnected) return true;
+
+    target.replaceWith(document.createTextNode(replacementText));
+    compose.dispatchEvent(new Event("input", { bubbles: true }));
+    return true;
+  }
+
+  function replaceIssueFallbackInCompose(issue, replacementText) {
+    const compose = getComposeElement();
+    if (!compose) return false;
+    const currentText = compose.innerText || compose.textContent || "";
+    for (const variant of getIssueQuoteVariants(issue.quote)) {
+      const updated = replaceFirstLiteralMatch(currentText, variant, replacementText);
+      if (updated === null) continue;
+      clearInlineHighlights();
+      compose.focus();
+      document.execCommand("selectAll", false, null);
+      document.execCommand("insertText", false, updated);
+      return true;
+    }
+    return false;
+  }
+
+  async function applySpecificIssueCorrection(result, issueIndex, button) {
+    const issue = result?.issues?.[Number(issueIndex)];
+    if (!issue) return;
+
+    const replacementText = (issue.suggestedFix || "").trim();
+    if (!replacementText) { focusIssueInCompose(issueIndex); return; }
+
+    const originalLabel = button.textContent;
+    button.disabled = true;
+    button.textContent = "Applying...";
+
+    const applied =
+      replaceIssueInSubject(issue, replacementText) ||
+      (focusIssueInCompose(issueIndex), replaceHighlightedIssue(issueIndex, replacementText)) ||
+      replaceIssueFallbackInCompose(issue, replacementText);
+
+    if (!applied) {
+      button.textContent = "Not found";
+      setTimeout(() => { button.disabled = false; button.textContent = originalLabel; }, 1200);
+      return;
+    }
+
+    clearInlineHighlights();
+    lastAnalyzedText = extractEmailText();
+    removeToast();
+    // Re-analyse in the background; keep current panel visible until results arrive
+    triggerBackgroundRescan();
+  }
+
+  // ─── Email client detection ───────────────────────────────────────────────
+
   function getEmailClient() {
-    if (location.hostname.includes("mail.google.com")) return "gmail";
-    if (location.hostname.includes("outlook")) return "outlook";
+    const h = location.hostname;
+    if (h.includes("mail.google.com")) return "gmail";
+    if (h.includes("outlook") || h.includes("cloud.microsoft")) return "outlook";
     return "unknown";
   }
 
-  // ─── Extraction du contenu de l'e-mail ───────────────────────────────────
+  // ─── Content extraction ───────────────────────────────────────────────────
 
-  /**
-   * Lit le texte de l'e-mail actuellement ouvert ou en cours de rédaction.
-   * Gère les deux modes Gmail : fenêtre de composition et volet de lecture.
-   * Plusieurs sélecteurs CSS sont tentés en cascade car Gmail change
-   * régulièrement ses noms de classes internes.
-   */
   function extractEmailText() {
     if (getEmailClient() === "gmail") {
-      // Mode composition : zone de saisie éditable
       const compose = getComposeElement();
       if (compose) return compose.innerText || compose.textContent || "";
-
-      // Mode lecture : volet de lecture avec sujet + corps
-      const subject = document.querySelector('h2.hP');
-      const body    = document.querySelector('.ii.gt');
+      const subject = document.querySelector("h2.hP");
+      const body = document.querySelector(".ii.gt");
       if (body) return (subject?.innerText || "") + "\n" + body.innerText;
     }
-
     if (getEmailClient() === "outlook") {
-      const compose  = document.querySelector('[aria-label="Message body, press Alt+F10 to exit"], .dFCbN');
+      const compose = getComposeElement();
       if (compose) return compose.innerText || "";
-      const reading  = document.querySelector('[role="document"] .allowTextSelection');
+      const reading = document.querySelector('[role="document"] .allowTextSelection') ||
+        document.querySelector('[role="document"][contenteditable="true"]');
       if (reading) return reading.innerText || "";
     }
-
     return "";
   }
 
-  // ─── Extraction de l'adresse du destinataire ──────────────────────────────
-
-  /**
-   * Lit l'adresse e-mail du champ "À" dans la fenêtre de composition Gmail.
-   * Ces informations sont transmises à l'IA pour contextualiser l'analyse
-   * (ex. : client retail vs investisseur professionnel).
-   *
-   * Stratégie en deux temps :
-   *   1. Cherche les "chips" de destinataires (éléments .vO avec data-hovercard-id)
-   *   2. Fallback sur le champ aria-label="À" si les chips ne sont pas encore rendus
-   */
   function extractRecipientEmail() {
-    // Les chips Gmail contiennent l'adresse dans data-hovercard-id ou l'attribut email
+    // Gmail chips
     const toChips = document.querySelectorAll('.vO[data-hovercard-id], .aB .vO');
     for (const chip of toChips) {
-      const email = chip.dataset.hovercardId || chip.getAttribute('email');
-      if (email && email.includes('@')) return email;
+      const email = chip.dataset.hovercardId || chip.getAttribute("email");
+      if (email && email.includes("@")) return email;
     }
-
-    // Fallback : champ texte brut (avant que Gmail transforme l'adresse en chip)
-    const toField = document.querySelector('[aria-label="À"], [aria-label="To"], [name="to"]');
+    // Gmail / Outlook text field
+    const toField = document.querySelector('[aria-label="À"], [aria-label="To"], [name="to"], [aria-label*="To" i][role="combobox"]');
     if (toField) {
       const match = toField.value?.match(/[\w.-]+@[\w.-]+\.\w+/);
       if (match) return match[0];
     }
-
-    return "";
-  }
-
-  // ─── Extraction du domaine de l'expéditeur ────────────────────────────────
-
-  /**
-   * Retourne uniquement le domaine de l'adresse Gmail connectée (ex. "margot-groupe.com").
-   * Cette information est considérée comme non sensible et permet à l'IA de savoir
-   * si l'expéditeur appartient à une entité financière réglementée, ce qui
-   * renforce les critères d'analyse appliqués.
-   */
-  function getSenderDomain() {
-    const accountEl = document.querySelector('[data-email]');
-    if (accountEl) {
-      const email = accountEl.dataset.email;
-      if (email && email.includes('@')) return email.split('@')[1];
+    // Outlook recipient pills
+    const outlookPills = document.querySelectorAll('[data-testid="recipient-well"] [title*="@"], .ms-Persona-primaryText[title*="@"]');
+    for (const pill of outlookPills) {
+      const title = pill.getAttribute("title") || "";
+      const match = title.match(/[\w.-]+@[\w.-]+\.\w+/);
+      if (match) return match[0];
     }
     return "";
   }
 
-  // ─── Barre d'outils de composition ───────────────────────────────────────
-
-  /**
-   * Localise la barre d'outils de formatage dans la fenêtre de composition Gmail.
-   * Plusieurs sélecteurs sont testés car la structure DOM varie selon
-   * la version de Gmail et le mode d'affichage (fenêtre flottante vs plein écran).
-   */
-  function findComposeToolbar() {
-    return (
-      document.querySelector('.btC .gU.Up') ||
-      document.querySelector('.aDh') ||
-      document.querySelector('[data-tooltip="More formatting options"]')?.closest('.btC')
-    );
+  function getSenderDomain() {
+    const accountEl = document.querySelector("[data-email]");
+    if (accountEl) {
+      const email = accountEl.dataset.email;
+      if (email && email.includes("@")) return email.split("@")[1];
+    }
+    return "";
   }
 
-  // ─── Injection du bouton "Conformité" ─────────────────────────────────────
+  // ─── Compose toolbar ──────────────────────────────────────────────────────
 
-  /**
-   * Insère le bouton ComplianceGuard dans la barre d'outils de composition.
-   * Idempotent : ne fait rien si le bouton est déjà présent (détecté via son id).
-   * Le clic ferme le toast automatique s'il est affiché, puis ouvre le panneau complet.
-   */
+  function findComposeToolbar() {
+    // Gmail
+    const gmail = document.querySelector(".btC .gU.Up") ||
+      document.querySelector(".aDh") ||
+      document.querySelector('[data-tooltip="More formatting options"]')?.closest(".btC");
+    if (gmail) return gmail;
+
+    // New Outlook (cloud.microsoft) — anchor on the send button row
+    const sendBtn = document.querySelector('button[aria-label*="Envoyer"]') ||
+      document.querySelector('button[aria-label*="Send"]') ||
+      document.querySelector('[data-testid="compose-send-button"]');
+    if (sendBtn) return sendBtn.closest('[role="toolbar"]') || sendBtn.parentElement;
+
+    // Classic Outlook Web (office.com / live.com)
+    return document.querySelector('[data-testid="compose-toolbar"]') ||
+      document.querySelector('[aria-label="Compose toolbar"]') ||
+      document.querySelector('.fui-Toolbar') ||
+      document.querySelector('.ms-OverflowSet[role="menubar"]') ||
+      null;
+  }
+
   function injectScanButton(toolbar) {
     if (document.getElementById("cg-scan-btn")) return;
-
     const btn = document.createElement("button");
-    btn.id    = "cg-scan-btn";
-    btn.title = "ComplianceGuard — Vérifier la conformité";
+    btn.id = "cg-scan-btn";
+    btn.title = "WiseMail — Check compliance";
     btn.innerHTML = `
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
         <path d="M12 2L3 7v5c0 5.25 3.75 10.15 9 11.35C17.25 22.15 21 17.25 21 12V7L12 2z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
         <path d="M9 12l2 2 4-4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
-      Conformité
+      Compliance
     `;
     btn.addEventListener("click", (e) => {
-      e.stopPropagation(); // Empêche Gmail de capturer le clic et de fermer la fenêtre
+      e.stopPropagation();
       removeToast();
       triggerScan(true);
     });
     toolbar.appendChild(btn);
   }
 
-  // ─── Écoute de la frappe (déclenchement automatique) ─────────────────────
+  // Fallback for email clients where no toolbar is found: render a floating button
+  // pinned to the bottom-right of the compose area.
+  function injectFloatingButton() {
+    if (document.getElementById("cg-scan-btn")) return;
+    const btn = document.createElement("button");
+    btn.id = "cg-scan-btn";
+    btn.title = "WiseMail — Check compliance";
+    btn.className = "cg-floating-btn";
+    btn.innerHTML = `
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+        <path d="M12 2L3 7v5c0 5.25 3.75 10.15 9 11.35C17.25 22.15 21 17.25 21 12V7L12 2z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+        <path d="M9 12l2 2 4-4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      Compliance
+    `;
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      removeToast();
+      triggerScan(true);
+    });
+    document.body.appendChild(btn);
+  }
 
-  /**
-   * Attache un écouteur "input" sur la zone de texte de composition.
-   * Un attribut data-cgListening est posé sur le nœud DOM pour garantir
-   * qu'un seul écouteur est enregistré, même si le MutationObserver
-   * appelle cette fonction plusieurs fois.
-   *
-   * Logique du debounce :
-   *   - Chaque frappe réinitialise le timer à 2 secondes.
-   *   - Quand le timer expire (l'utilisateur a arrêté de taper), on vérifie :
-   *       · Le texte fait au moins 30 caractères (évite les e-mails vides)
-   *       · Le texte est différent du dernier analysé (évite les doublons)
-   *       · Aucune analyse n'est déjà en cours (verrou isAnalyzing)
-   */
+  // ─── Typing listener ──────────────────────────────────────────────────────
+
   function attachComposeListener() {
     const compose = getComposeElement();
     if (!compose || compose.dataset.cgListening) return;
     compose.dataset.cgListening = "true";
 
     compose.addEventListener("input", () => {
+      // User is typing again — unlock Fix All for the new content
+      const current = (compose.innerText || compose.textContent || "").trim();
+      if (lastFixedText && current !== lastFixedText.trim()) lastFixedText = "";
+
       clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(() => {
+      debounceTimer = setTimeout(async () => {
+        const settings = await browser.runtime.sendMessage({ type: "GET_SETTINGS" });
+        if (settings.autoScan === false) return;
         const text = compose.innerText || compose.textContent || "";
         if (text.trim().length >= 30 && text !== lastAnalyzedText && !isAnalyzing) {
           triggerAutoScan(text);
         }
-      }, 2000); // 2 secondes d'inactivité avant analyse
+      }, 1000);
     });
   }
 
-  // ─── Analyse automatique ──────────────────────────────────────────────────
+  // ─── Automatic analysis ───────────────────────────────────────────────────
 
-  /**
-   * Déclenche une analyse silencieuse (sans état de chargement dans le panneau).
-   * Si la clé API n'est pas configurée, on abandonne silencieusement
-   * plutôt que d'afficher une erreur à chaque frappe.
-   * En cas de problèmes détectés (critiques ou avertissements), affiche le toast.
-   *
-   * @param {string} text - Texte de l'e-mail capturé après le debounce
-   */
   async function triggerAutoScan(text) {
     if (isAnalyzing) return;
     isAnalyzing = true;
@@ -534,57 +758,58 @@
     removeToast();
 
     const settings = await browser.runtime.sendMessage({ type: "GET_SETTINGS" });
-    // Pas de clé API → on n'embête pas l'utilisateur avec une erreur répétée
     if (!settings.apiKey) { isAnalyzing = false; return; }
 
     const response = await browser.runtime.sendMessage({
       type: "ANALYZE_EMAIL",
-      emailText:      text,
-      jurisdiction:   settings.jurisdiction || "FR",
-      subjectText:    extractSubjectText(),
+      emailText: text,
+      jurisdiction: settings.jurisdiction || "FR",
+      subjectText: extractSubjectText(),
       recipientEmail: extractRecipientEmail(),
-      senderDomain:   getSenderDomain()
+      senderDomain: getSenderDomain(),
+      attachments: getAttachmentsForAnalysis(),
     });
 
     isAnalyzing = false;
 
     if (response.success && response.result) {
       highlightIssuesInCompose(response.result);
-      showPanel({ success: true, result: response.result, emailText: text, autoOpened: true });
+      const attachments = getAttachmentsForAnalysis();
+      if (settings.showPanel !== false) {
+        showPanel({ success: true, result: response.result, emailText: text, autoOpened: true, attachments });
+      } else {
+        const hasRealIssues = (response.result.issues || []).some(i => i.severity !== "zero-risk");
+        if (hasRealIssues || (response.result.requiredDisclaimers || []).length) {
+          showCorrectionToast(response.result);
+        }
+      }
     } else {
       clearInlineHighlights();
     }
   }
 
-  // ─── Analyse manuelle (panneau complet) ───────────────────────────────────
+  // ─── Manual analysis ──────────────────────────────────────────────────────
 
-  /**
-   * Déclenche une analyse avec affichage du panneau complet.
-   * Appelé par le bouton dans la barre d'outils et le raccourci clavier.
-   * Affiche immédiatement un état de chargement pendant que la requête s'effectue.
-   *
-   * @param {boolean} showFullPanel - Si false, analyse sans afficher le panneau
-   */
   async function triggerScan(showFullPanel = true) {
     const text = extractEmailText();
     if (!text || text.trim().length < 20) {
-      if (showFullPanel) {
-        showPanel({ error: "EMPTY", message: "Aucun contenu d'e-mail détecté. Rédigez ou ouvrez un e-mail." });
-      }
+      if (showFullPanel) showPanel({ error: "EMPTY", message: "No email content detected. Compose or open an email." });
       return;
     }
 
-    if (showFullPanel) showPanel({ loading: true });
+    const attachments = getAttachmentsForAnalysis();
+    if (showFullPanel) showPanel({ loading: true, attachments });
 
     const settings = await browser.runtime.sendMessage({ type: "GET_SETTINGS" });
 
     const response = await browser.runtime.sendMessage({
       type: "ANALYZE_EMAIL",
-      emailText:      text,
-      jurisdiction:   settings.jurisdiction || "FR",
-      subjectText:    extractSubjectText(),
+      emailText: text,
+      jurisdiction: settings.jurisdiction || "FR",
+      subjectText: extractSubjectText(),
       recipientEmail: extractRecipientEmail(),
-      senderDomain:   getSenderDomain()
+      senderDomain: getSenderDomain(),
+      attachments,
     });
 
     if (response.success && response.result) {
@@ -593,36 +818,85 @@
       clearInlineHighlights();
     }
 
-    if (showFullPanel) showPanel({ ...response, emailText: text });
+    if (showFullPanel) showPanel({ ...response, emailText: text, attachments });
   }
 
-  // ─── Toast de suggestion ──────────────────────────────────────────────────
+  // ─── Background re-scan (after applying an in-panel fix) ─────────────────
 
   /**
-   * Affiche un bandeau compact en bas à gauche de l'écran.
-   * Le toast résume les problèmes détectés et propose trois actions :
-   *   - "Corriger" : applique directement la version corrigée dans la zone de texte
-   *   - "Détails"  : ouvre le panneau complet
-   *   - "✕"        : ferme le toast
-   *
-   * Le toast se ferme automatiquement après 12 secondes.
-   *
-   * @param {object} result - Objet résultat retourné par l'IA (structure JSON)
+   * Runs analysis silently while the current panel stays visible.
+   * Shows a subtle "Re-analysing…" indicator in the footer.
+   * Replaces the panel with fresh results when the scan completes.
+   * Falls back to a full loading-panel scan when no panel is open.
    */
-  function showCorrectionToast(result) {
-    removeToast(); // Ferme un éventuel toast précédent
+  async function triggerBackgroundRescan() {
+    if (backgroundRescanRunning) return;
 
-    const critical       = (result.issues || []).filter(i => i.severity === "critical").length;
-    const warnings       = (result.issues || []).filter(i => i.severity === "warning").length;
-    const hasCorrection  =
+    if (!activePanel) {
+      triggerScan(true);
+      return;
+    }
+
+    backgroundRescanRunning = true;
+
+    // Show subtle indicator so the user knows a rescan is running
+    const footer = activePanel?.querySelector(".cg-footer");
+    if (footer) {
+      footer.innerHTML = `WiseMail · <span class="cg-footer-updating">Re-analysing…<span class="cg-footer-dots"></span></span>`;
+    }
+
+    const text = extractEmailText();
+    const attachments = getAttachmentsForAnalysis();
+
+    if (!text || text.trim().length < 20) {
+      backgroundRescanRunning = false;
+      if (footer) footer.textContent = "WiseMail · Compliance Analysis";
+      return;
+    }
+
+    const settings = await browser.runtime.sendMessage({ type: "GET_SETTINGS" });
+    const response = await browser.runtime.sendMessage({
+      type: "ANALYZE_EMAIL",
+      emailText: text,
+      jurisdiction: settings.jurisdiction || "FR",
+      subjectText: extractSubjectText(),
+      recipientEmail: extractRecipientEmail(),
+      senderDomain: getSenderDomain(),
+      attachments,
+    });
+
+    backgroundRescanRunning = false;
+    lastAnalyzedText = text;
+
+    if (response.success && response.result) {
+      highlightIssuesInCompose(response.result);
+      showPanel({ ...response, emailText: text, attachments });
+    } else {
+      clearInlineHighlights();
+      // Restore footer on failure to avoid leaving the spinner up
+      const currentFooter = activePanel?.querySelector(".cg-footer");
+      if (currentFooter) currentFooter.textContent = "WiseMail · Compliance Analysis";
+    }
+  }
+
+  // ─── Toast ────────────────────────────────────────────────────────────────
+
+  function showCorrectionToast(result) {
+    removeToast();
+
+    const critical = (result.issues || []).filter(i => i.severity === "critical").length;
+    const warnings = (result.issues || []).filter(i => i.severity === "warning").length;
+    const currentText = (extractEmailText() || "").trim();
+    const alreadyFixed = lastFixedText && currentText === lastFixedText.trim();
+    const hasCorrection = !alreadyFixed && (
       (result.correctedEmail && result.correctedEmail.length > 10) ||
-      (result.correctedSubject && result.correctedSubject.trim().length > 0);
+      (result.correctedSubject && result.correctedSubject.trim().length > 0)
+    );
     const hasDisclaimers = result.requiredDisclaimers?.length > 0;
 
-    // Construction du résumé coloré des problèmes
     const parts = [];
-    if (critical > 0) parts.push(`<span class="cg-toast-critical">${critical} critique${critical > 1 ? "s" : ""}</span>`);
-    if (warnings > 0) parts.push(`<span class="cg-toast-warning">${warnings} avertissement${warnings > 1 ? "s" : ""}</span>`);
+    if (critical > 0) parts.push(`<span class="cg-toast-critical">${critical} critical</span>`);
+    if (warnings > 0) parts.push(`<span class="cg-toast-warning">${warnings} warning${warnings > 1 ? "s" : ""}</span>`);
 
     activeToast = document.createElement("div");
     activeToast.id = "cg-toast";
@@ -634,14 +908,12 @@
         </svg>
       </div>
       <div class="cg-toast-body">
-        <p class="cg-toast-title">Problèmes de conformité détectés</p>
+        <p class="cg-toast-title">Compliance issues detected</p>
         <p class="cg-toast-counts">${parts.join(" · ")}</p>
       </div>
       <div class="cg-toast-actions">
-        ${(hasCorrection || hasDisclaimers)
-          ? `<button class="cg-toast-btn cg-toast-accept" id="cg-toast-accept">Corriger</button>`
-          : ""}
-        <button class="cg-toast-btn cg-toast-details" id="cg-toast-details">Détails</button>
+        ${(hasCorrection || hasDisclaimers) ? `<button class="cg-toast-btn cg-toast-accept" id="cg-toast-accept">Fix</button>` : ""}
+        <button class="cg-toast-btn cg-toast-details" id="cg-toast-details">Details</button>
         <button class="cg-toast-btn cg-toast-dismiss" id="cg-toast-close">✕</button>
       </div>
     `;
@@ -650,7 +922,6 @@
 
     activeToast.querySelector("#cg-toast-close")?.addEventListener("click", removeToast);
 
-    // "Corriger" : préfère la version corrigée complète, sinon insère les mentions légales
     activeToast.querySelector("#cg-toast-accept")?.addEventListener("click", () => {
       if (hasCorrection) {
         applyEmailCorrection(result);
@@ -660,86 +931,55 @@
       removeToast();
     });
 
-    // "Détails" : ferme le toast et ouvre le panneau complet avec les résultats déjà calculés
     activeToast.querySelector("#cg-toast-details")?.addEventListener("click", () => {
       removeToast();
-      showPanel({ success: true, result, emailText: lastAnalyzedText });
+      showPanel({ success: true, result, emailText: lastAnalyzedText, attachments: getAttachmentsForAnalysis() });
     });
 
-    // Auto-dismiss après 12 secondes pour ne pas bloquer l'interface indéfiniment
     setTimeout(() => { if (activeToast) removeToast(); }, 12000);
   }
 
-  /** Retire le toast du DOM et libère la référence. */
   function removeToast() {
     if (activeToast) { activeToast.remove(); activeToast = null; }
   }
 
-  // ─── Correction de l'e-mail ───────────────────────────────────────────────
+  // ─── Email correction ─────────────────────────────────────────────────────
 
-  /**
-   * Remplace le contenu entier de la zone de composition par le texte corrigé
-   * fourni par l'IA. Utilise execCommand("insertText") pour rester compatible
-   * avec le système d'annulation (Ctrl+Z) de Gmail.
-   *
-   * @param {string} correctedText - Version corrigée complète de l'e-mail
-   */
   function applyEmailCorrection(resultOrText) {
     const { subject, body } = parseCorrectedEmailParts(resultOrText);
     const compose = getComposeElement();
-    if (subject) {
-      setSubjectText(subject);
-    }
+    if (subject) setSubjectText(subject);
     if (compose && body) {
       clearInlineHighlights();
       compose.focus();
       document.execCommand("selectAll", false, null);
       document.execCommand("insertText", false, body);
       lastAnalyzedText = body;
+      lastFixedText = body;
     }
   }
 
-  // ─── Insertion des mentions légales ───────────────────────────────────────
-
-  /**
-   * Ajoute les mentions légales à la fin du texte de l'e-mail en cours de rédaction,
-   * séparées par une ligne de démarcation.
-   * Utilisée quand l'IA n'a pas fourni de version corrigée complète
-   * mais a identifié des mentions légales manquantes.
-   *
-   * @param {Array<{regulation: string, text: string}>} disclaimers - Liste des mentions à insérer
-   */
   function insertDisclaimersIntoCompose(disclaimers) {
     if (!disclaimers.length) return;
-
-    const text = "\n\n─────────────────────────────\nMENTIONS LÉGALES OBLIGATOIRES :\n\n" +
+    const text = "\n\n─────────────────────────────\nMANDATORY LEGAL DISCLAIMERS:\n\n" +
       disclaimers.map(d => `[${d.regulation}] ${d.text}`).join("\n\n");
 
     const compose = getComposeElement();
     if (compose) {
       clearInlineHighlights();
       compose.focus();
-      // Déplace le curseur à la fin du document avant d'insérer
-      const sel   = window.getSelection();
+      const sel = window.getSelection();
       const range = document.createRange();
       range.selectNodeContents(compose);
-      range.collapse(false); // false = fin du contenu
+      range.collapse(false);
       sel.removeAllRanges();
       sel.addRange(range);
       document.execCommand("insertText", false, text);
     }
   }
 
-  // ─── Panneau de résultats complet ─────────────────────────────────────────
+  // ─── Panel ────────────────────────────────────────────────────────────────
 
-  /**
-   * Crée et affiche le panneau de résultats dans le DOM de Gmail.
-   * Le panneau est recréé à chaque appel (pas de mise à jour partielle)
-   * pour simplifier la gestion d'état. Les écouteurs d'événements sont
-   * rattachés après insertion dans le DOM.
-   *
-   * @param {object} state - État à afficher : {loading} | {error, message} | {success, result}
-   */
   function showPanel(state) {
     removePanel();
     activePanel = document.createElement("div");
@@ -751,102 +991,95 @@
 
     activePanel.querySelector("#cg-close")?.addEventListener("click", removePanel);
 
-    // Boutons "Copier" des mentions légales individuelles
     activePanel.querySelectorAll(".cg-copy-btn").forEach(btn => {
       btn.addEventListener("click", () => {
         navigator.clipboard.writeText(btn.dataset.text).then(() => {
-          btn.textContent = "Copié !";
-          setTimeout(() => btn.textContent = "Copier", 1500);
+          btn.textContent = "Copied!";
+          setTimeout(() => btn.textContent = "Copy", 1500);
         });
       });
     });
 
-    // Bouton "Insérer toutes les mentions"
     activePanel.querySelector("#cg-insert-all")?.addEventListener("click", () => {
       insertDisclaimersIntoCompose(state.result?.requiredDisclaimers || []);
     });
 
-    // Bouton "Appliquer" la correction complète
-    activePanel.querySelector("#cg-apply-correction")?.addEventListener("click", () => {
+    activePanel.querySelector("#cg-apply-correction")?.addEventListener("click", (e) => {
       if ((state.result?.correctedEmail && state.result.correctedEmail.length > 10) ||
           (state.result?.correctedSubject && state.result.correctedSubject.trim().length > 0)) {
+        const btn = e.currentTarget;
+        btn.disabled = true;
+        btn.textContent = "Fixed ✓";
         applyEmailCorrection(state.result);
-        activePanel.querySelector("#cg-apply-correction").textContent = "Tout corrigé ✓";
+        // Do NOT re-scan automatically — wait for the user to make new edits
       }
     });
 
     activePanel.querySelectorAll(".cg-issue-focus-btn").forEach((button) => {
-      button.addEventListener("click", () => {
+      button.addEventListener("click", async () => {
+        const issue = state.result?.issues?.[Number(button.dataset.issueIndex)];
+        if (issue?.suggestedFix?.trim()) {
+          await applySpecificIssueCorrection(state.result, button.dataset.issueIndex, button);
+          return;
+        }
         focusIssueInCompose(button.dataset.issueIndex);
+      });
+
+      button.addEventListener("mouseenter", () => {
+        const key = String(button.dataset.issueIndex);
+        (highlightedIssueSpans.get(key) || []).forEach(s => s.classList.add("cg-inline-issue-hover"));
+      });
+
+      button.addEventListener("mouseleave", () => {
+        const key = String(button.dataset.issueIndex);
+        (highlightedIssueSpans.get(key) || []).forEach(s => s.classList.remove("cg-inline-issue-hover"));
       });
     });
 
-    // Bouton "Ouvrir les paramètres" depuis l'état d'erreur NO_API_KEY
     activePanel.querySelector("#cg-open-settings")?.addEventListener("click", () => {
       browser.runtime.sendMessage({ type: "OPEN_SETTINGS" });
     });
   }
 
-  /** Retire le panneau du DOM et libère la référence. */
   function removePanel() {
     if (activePanel) { activePanel.remove(); activePanel = null; }
   }
 
-  // ─── Construction du HTML du panneau ──────────────────────────────────────
+  // ─── Panel HTML builder ───────────────────────────────────────────────────
 
-  /**
-   * Génère le HTML du panneau en fonction de l'état courant.
-   * Trois états possibles :
-   *   1. loading  — spinner + message d'attente
-   *   2. error    — message d'erreur avec action de récupération
-   *   3. résultat — score de risque, liste des problèmes, mentions légales
-   *
-   * Note : le HTML est généré côté client et inséré via innerHTML.
-   * Les données provenant de l'IA (issues, disclaimers) sont du texte
-   * non interprété comme HTML — risque XSS limité mais à garder en tête
-   * si l'on ouvre l'outil à des e-mails malveillants.
-   *
-   * @param {object} state
-   * @returns {string} HTML complet du panneau
-   */
   function buildPanelHTML(state) {
-    // ── État : chargement ───────────────────────────────────────────────────
+    const attachments = state.attachments || [];
+
+    // ── Loading ─────────────────────────────────────────────────────────────
     if (state.loading) {
       return `
         <div class="cg-header">
           <div class="cg-logo">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-              <path d="M12 2L3 7v5c0 5.25 3.75 10.15 9 11.35C17.25 22.15 21 17.25 21 12V7L12 2z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
-              <path d="M9 12l2 2 4-4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-            </svg>
-            ComplianceGuard
+            <img src="${browser.runtime.getURL("icons/logo.jpeg")}" alt="WiseMail" class="cg-logo-img">
           </div>
-          <button id="cg-close" class="cg-close-btn" aria-label="Fermer">✕</button>
+          <button id="cg-close" class="cg-close-btn" aria-label="Close">✕</button>
         </div>
         <div class="cg-loading">
           <div class="cg-spinner"></div>
-          <p class="cg-loading-title">Analyse en cours…</p>
-          <p class="cg-loading-sub">AMF · MIF II · RGPD · CMF</p>
+          <p class="cg-loading-title">Analysing…</p>
+          <p class="cg-loading-sub">AMF · MiFID II · GDPR · CMF${attachments.length ? ` · ${attachments.length} attachment${attachments.length > 1 ? "s" : ""}` : ""}</p>
         </div>
       `;
     }
 
-    // ── État : erreur ────────────────────────────────────────────────────────
+    // ── Error ────────────────────────────────────────────────────────────────
     if (state.error) {
       const messages = {
-        NO_API_KEY:    `<p>Aucune clé API configurée.</p><button id="cg-open-settings" class="cg-settings-link">Ouvrir les paramètres →</button>`,
+        NO_API_KEY:    `<p>No API key configured.</p><button id="cg-open-settings" class="cg-settings-link">Open settings →</button>`,
         EMPTY:         `<p>${state.message}</p>`,
-        API_ERROR:     `<p>Erreur API : ${state.message}</p>`,
-        PARSE_ERROR:   `<p>Réponse illisible. Veuillez réessayer.</p>`,
-        NETWORK_ERROR: `<p>Erreur réseau : ${state.message}</p>`
+        API_ERROR:     `<p>API error: ${state.message}</p>`,
+        PARSE_ERROR:   `<p>Unreadable response. Please try again.</p>`,
+        NETWORK_ERROR: `<p>Network error: ${state.message}</p>`,
       };
       return `
         <div class="cg-header">
           <div class="cg-logo">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-              <path d="M12 2L3 7v5c0 5.25 3.75 10.15 9 11.35C17.25 22.15 21 17.25 21 12V7L12 2z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
-            </svg>
-            ComplianceGuard
+            <img src="${browser.runtime.getURL("icons/logo.jpeg")}" alt="WiseMail" class="cg-logo-img">
           </div>
           <button id="cg-close" class="cg-close-btn">✕</button>
         </div>
@@ -857,38 +1090,35 @@
       `;
     }
 
-    // ── État : résultats ─────────────────────────────────────────────────────
+    // ── Results ──────────────────────────────────────────────────────────────
     const r = state.result;
-    if (!r) return `<div class="cg-header"><button id="cg-close" class="cg-close-btn">✕</button></div><p class="cg-pad">Aucun résultat.</p>`;
-
-    // Score de risque : 0-39 = conforme, 40-69 = modéré, 70-100 = élevé
-    const score      = r.riskScore ?? 0;
-    const scoreClass = score >= 70 ? "high" : score >= 40 ? "medium" : "low";
-    const scoreLabel = score >= 70 ? "Risque élevé" : score >= 40 ? "Risque modéré" : "Conforme";
+    if (!r) return `<div class="cg-header"><button id="cg-close" class="cg-close-btn">✕</button></div><p class="cg-pad">No results.</p>`;
 
     const indexedIssues = (r.issues || []).map((issue, index) => ({ ...issue, __index: index }));
-    const criticals = indexedIssues.filter(i => i.severity === "critical");
-    const warnings  = indexedIssues.filter(i => i.severity === "warning");
-    const infos     = indexedIssues.filter(i => i.severity === "info");
+    const criticals  = indexedIssues.filter(i => i.severity === "critical");
+    const warnings   = indexedIssues.filter(i => i.severity === "warning");
+    const infos      = indexedIssues.filter(i => i.severity === "info");
+    const zeroRisks  = indexedIssues.filter(i => i.severity === "zero-risk");
 
-    // Correspondance entre les types de problèmes (codes IA) et les libellés affichés
+    const correctionSeverity = criticals.length ? "critical" : warnings.length ? "warning" : "ok";
+
     const typeLabel = {
-      MENTION_PERFORMANCES_PASSEES: "Performances passées",
-      GARANTIE_RENDEMENT:           "Garantie de rendement",
-      ABSENCE_MISE_EN_GARDE:        "Avertissement absent",
-      VIOLATION_RGPD:               "Violation RGPD",
-      INFORMATION_TROMPEUSE:        "Information trompeuse",
-      ABSENCE_MENTION_AMF:          "Mention AMF absente",
-      VIOLATION_LCBFT:              "Violation LCB-FT",
-      CONFLIT_INTERETS:             "Conflit d'intérêts",
-      MANQUEMENT_REGLEMENTAIRE:     "Manquement réglementaire",
-      // Codes hérités de l'ancienne version (rétrocompatibilité)
-      DISCLAIMER_MISSING:           "Mention légale absente",
-      GDPR_VIOLATION:               "Violation RGPD",
-      DATA_PRIVACY:                 "Données personnelles"
+      MENTION_PERFORMANCES_PASSEES: "Past performance",
+      GARANTIE_RENDEMENT:           "Return guarantee",
+      ABSENCE_MISE_EN_GARDE:        "Missing warning",
+      VIOLATION_RGPD:               "GDPR violation",
+      INFORMATION_TROMPEUSE:        "Misleading information",
+      ABSENCE_MENTION_AMF:          "Missing AMF disclosure",
+      VIOLATION_LCBFT:              "AML/CFT violation",
+      CONFLIT_INTERETS:             "Conflict of interest",
+      MANQUEMENT_REGLEMENTAIRE:     "Regulatory breach",
+      SPELLING_GRAMMAR:             "Spelling / Grammar",
+      ATTACHMENT_READ_ERROR:        "Attachment scan failed",
+      DISCLAIMER_MISSING:           "Missing legal disclaimer",
+      GDPR_VIOLATION:               "GDPR violation",
+      DATA_PRIVACY:                 "Personal data",
     };
 
-    /** Génère le HTML pour un groupe de problèmes d'une même sévérité. */
     function renderIssues(issues, cls) {
       return issues.map(issue => `
         <div class="cg-issue cg-issue-${cls}">
@@ -899,13 +1129,12 @@
           <p class="cg-issue-desc">${issue.description}</p>
           ${issue.quote ? `<blockquote class="cg-issue-quote">${issue.quote}</blockquote>` : ""}
           ${issue.quote
-            ? `<div class="cg-issue-actions"><button class="cg-issue-focus-btn" data-issue-index="${issue.__index}">Modifier ce passage</button></div>`
+            ? `<div class="cg-issue-actions"><button class="cg-issue-focus-btn" data-issue-index="${issue.__index}">${issue.suggestedFix?.trim() ? "Fix this" : "View in email"}</button></div>`
             : ""}
         </div>
       `).join("");
     }
 
-    // HTML des mentions légales avec bouton "Copier" individuel
     const disclaimersHTML = (r.requiredDisclaimers || []).map(d => `
       <div class="cg-disclaimer">
         <div class="cg-disclaimer-top">
@@ -913,58 +1142,61 @@
           <span class="cg-disclaimer-jur">${d.jurisdiction}</span>
         </div>
         <p class="cg-disclaimer-text">${d.text}</p>
-        <button class="cg-copy-btn" data-text="${d.text.replace(/"/g, '&quot;')}">Copier</button>
+        <button class="cg-copy-btn" data-text="${d.text.replace(/"/g, "&quot;")}">Copy</button>
       </div>
     `).join("");
 
-    // La correction complète est disponible si l'IA a fourni un e-mail réécrit
-    const hasCorrection =
+    const currentEmailText = (extractEmailText() || "").trim();
+    const alreadyFixed = lastFixedText && currentEmailText === lastFixedText.trim();
+    const hasCorrection = !alreadyFixed && (
       (r.correctedEmail && r.correctedEmail.length > 10) ||
-      (r.correctedSubject && r.correctedSubject.trim().length > 0);
+      (r.correctedSubject && r.correctedSubject.trim().length > 0)
+    );
+
+    const appliedSkillsHTML = (r.appliedSkills || [])
+      .map(skill => `<span class="cg-skill-chip">${skill.name}</span>`).join("");
+
+    // Attachment scan status section
+    const attachmentRowsHTML = attachments.map(att => `
+      <div class="cg-attachment-row ${att.error ? "cg-attachment-error" : "cg-attachment-ok"}">
+        <span class="cg-attachment-icon">${att.error ? "✗" : "✓"}</span>
+        <span class="cg-attachment-name" title="${att.name}">${att.name}</span>
+        <span class="cg-attachment-status">${att.error ? att.error : `${att.text.length.toLocaleString()} chars`}</span>
+      </div>
+    `).join("");
 
     return `
       <div class="cg-header">
         <div class="cg-logo">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-            <path d="M12 2L3 7v5c0 5.25 3.75 10.15 9 11.35C17.25 22.15 21 17.25 21 12V7L12 2z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
-            <path d="M9 12l2 2 4-4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
-          ComplianceGuard
+          <img src="${browser.runtime.getURL("icons/logo.jpeg")}" alt="WiseMail" class="cg-logo-img" style="filter:brightness(0) invert(1);">
         </div>
-        <button id="cg-close" class="cg-close-btn" aria-label="Fermer">✕</button>
+        <button id="cg-close" class="cg-close-btn" aria-label="Close">✕</button>
       </div>
 
-      <!-- Score de risque global -->
-      <div class="cg-score-section">
-        <div class="cg-score-ring cg-score-${scoreClass}">
-          <span class="cg-score-num">${score}</span>
-        </div>
-        <div class="cg-score-info">
-          <p class="cg-score-label cg-score-label-${scoreClass}">${scoreLabel}</p>
-          <p class="cg-summary">${r.summary || ""}</p>
-        </div>
-      </div>
-
-      <!-- Bannière de correction rapide (si l'IA a produit une version corrigée) -->
       ${hasCorrection ? `
-        <div class="cg-correction-banner">
+        <div class="cg-correction-banner cg-correction-${correctionSeverity}">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
             <path d="M9 12l2 2 4-4" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
             <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/>
           </svg>
-          Une correction complète est disponible
-          <button id="cg-apply-correction" class="cg-correction-btn">Corriger tout</button>
+          A complete correction is available
+          <button id="cg-apply-correction" class="cg-correction-btn">Fix All</button>
         </div>
       ` : ""}
 
-      <!-- Liste des problèmes détectés, groupés par sévérité -->
       ${r.issues?.length ? `
-        <div class="cg-section">
-          <div class="cg-section-title">Problèmes <span class="cg-badge">${r.issues.length}</span></div>
-          ${criticals.length ? `<p class="cg-group-label cg-group-critical">Critiques (${criticals.length})</p>${renderIssues(criticals, "critical")}` : ""}
-          ${warnings.length  ? `<p class="cg-group-label cg-group-warning">Avertissements (${warnings.length})</p>${renderIssues(warnings, "warning")}` : ""}
-          ${infos.length     ? `<p class="cg-group-label cg-group-info">Informations (${infos.length})</p>${renderIssues(infos, "info")}` : ""}
-        </div>
+        <details class="cg-skills-strip" open>
+          <summary class="cg-skills-summary">
+            <span class="cg-skills-summary-label">Issues</span>
+            <span class="cg-badge">${r.issues.length}</span>
+          </summary>
+          <div class="cg-issues-body">
+            ${criticals.length  ? `<p class="cg-group-label cg-group-critical">Critical (${criticals.length})</p>${renderIssues(criticals, "critical")}` : ""}
+            ${warnings.length   ? `<p class="cg-group-label cg-group-warning">Warnings (${warnings.length})</p>${renderIssues(warnings, "warning")}` : ""}
+            ${infos.length      ? `<p class="cg-group-label cg-group-info">Info (${infos.length})</p>${renderIssues(infos, "info")}` : ""}
+            ${zeroRisks.length  ? `<p class="cg-group-label cg-group-zero-risk">Spelling / Grammar (${zeroRisks.length})</p>${renderIssues(zeroRisks, "zero-risk")}` : ""}
+          </div>
+        </details>
       ` : `
         <div class="cg-section">
           <div class="cg-clean">
@@ -972,54 +1204,94 @@
               <path d="M9 12l2 2 4-4" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
               <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/>
             </svg>
-            Aucun problème de conformité détecté
+            No compliance issues detected
           </div>
         </div>
       `}
 
-      <!-- Mentions légales à insérer dans l'e-mail -->
-      ${r.requiredDisclaimers?.length ? `
-        <div class="cg-section">
-          <div class="cg-section-title">
-            Mentions légales obligatoires
-            <span class="cg-badge">${r.requiredDisclaimers.length}</span>
-          </div>
-          ${disclaimersHTML}
-          <button id="cg-insert-all" class="cg-insert-btn">Insérer toutes les mentions</button>
-        </div>
+      ${attachments.length ? `
+        <details class="cg-skills-strip cg-attachments-strip">
+          <summary class="cg-skills-summary">
+            <span class="cg-skills-summary-label">Attachments</span>
+            <span class="cg-badge ${attachments.some(a => a.error) ? "cg-badge-warn" : ""}">${attachments.length}</span>
+          </summary>
+          <div class="cg-attachments-body">${attachmentRowsHTML}</div>
+        </details>
       ` : ""}
 
-      <div class="cg-footer">
-        ComplianceGuard · Droit français &amp; européen
-      </div>
+      ${r.appliedSkills?.length ? `
+        <details class="cg-skills-strip">
+          <summary class="cg-skills-summary">
+            <span class="cg-skills-summary-label">Concerned Laws</span>
+            <span class="cg-badge">${r.appliedSkills.length}</span>
+          </summary>
+          <div class="cg-skill-chip-row">${appliedSkillsHTML}</div>
+        </details>
+      ` : ""}
+
+      <div class="cg-footer">WiseMail · Compliance Analysis</div>
     `;
   }
 
-  // ─── Observation du DOM ───────────────────────────────────────────────────
+  // ─── DOM observation ──────────────────────────────────────────────────────
 
   /**
-   * Lance un MutationObserver sur document.body pour détecter
-   * l'apparition dynamique de la barre d'outils de composition.
-   * Gmail crée la fenêtre de composition de manière asynchrone —
-   * sans cet observateur, le bouton ne serait jamais injecté.
+   * Main MutationObserver:
+   *   1. Injects the toolbar button and typing listener when Gmail opens a compose window.
+   *   2. Hooks file inputs for PDF attachment scanning.
+   *   3. Closes the panel/toast when the compose window is dismissed.
    */
   function observe() {
-    const mo = new MutationObserver(() => {
+    // Hook any file inputs already in the DOM
+    document.querySelectorAll('input[type="file"]').forEach(hookFileInput);
+
+    const mo = new MutationObserver((mutations) => {
+      // Hook newly added file inputs
+      for (const mutation of mutations) {
+        for (const node of mutation.addedNodes) {
+          if (node.nodeType !== Node.ELEMENT_NODE) continue;
+          if (node.matches?.('input[type="file"]')) hookFileInput(node);
+          node.querySelectorAll?.('input[type="file"]').forEach(hookFileInput);
+        }
+      }
+
+      const compose = getComposeElement();
       const toolbar = findComposeToolbar();
       if (toolbar) {
         injectScanButton(toolbar);
         attachComposeListener();
+      } else if (compose && !document.getElementById("cg-scan-btn")) {
+        // No toolbar found — inject floating button so Outlook/other clients still work
+        injectFloatingButton();
+        attachComposeListener();
+      }
+
+      // Hide floating button when compose is gone
+      if (!compose && document.getElementById("cg-scan-btn")?.classList.contains("cg-floating-btn")) {
+        document.getElementById("cg-scan-btn").remove();
+      }
+
+      // Detect compose window close: dismiss panel and reset state
+      if (compose) {
+        clearTimeout(composeCloseTimer);
+      } else if (activePanel || activeToast) {
+        clearTimeout(composeCloseTimer);
+        composeCloseTimer = setTimeout(() => {
+          if (!getComposeElement()) {
+            removePanel();
+            removeToast();
+            lastAnalyzedText = "";
+            attachmentContent.clear();
+          }
+        }, 500);
       }
     });
+
     mo.observe(document.body, { childList: true, subtree: true });
   }
 
-  // ─── Raccourci clavier ────────────────────────────────────────────────────
+  // ─── Keyboard shortcut ────────────────────────────────────────────────────
 
-  /**
-   * Alt+Maj+C (Windows/Linux) — déclenche le scan manuel.
-   * Ce raccourci ne rentre pas en conflit avec les raccourcis Gmail natifs.
-   */
   document.addEventListener("keydown", (e) => {
     if (e.altKey && e.shiftKey && e.key === "C") {
       removeToast();
@@ -1029,16 +1301,12 @@
 
   window.addEventListener("resize", () => {
     if (!activePanel) return;
-    if (panelManualPosition) {
-      applyPanelPosition(activePanel, panelManualPosition);
-      return;
-    }
+    if (panelManualPosition) { applyPanelPosition(activePanel, panelManualPosition); return; }
     positionPanel(activePanel);
   });
 
-  // ─── Messages entrants depuis le popup ────────────────────────────────────
+  // ─── Messages from popup ──────────────────────────────────────────────────
 
-  /** Le popup peut déclencher un scan en cliquant sur son bouton principal. */
   browser.runtime.onMessage.addListener((msg) => {
     if (msg.type === "TRIGGER_SCAN") {
       removeToast();
@@ -1046,7 +1314,7 @@
     }
   });
 
-  // ─── Démarrage ────────────────────────────────────────────────────────────
+  // ─── Startup ──────────────────────────────────────────────────────────────
   observe();
 
 })();

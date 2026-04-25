@@ -1,4 +1,4 @@
-/* ComplianceGuard — styles injectés dans Gmail */
+/* ComplianceGuard — styles injected into Gmail */
 
 /* ─── Bouton dans la barre d'outils ──────────────────────────────────────── */
 #cg-scan-btn {
@@ -26,13 +26,23 @@
 }
 #cg-scan-btn svg { flex-shrink: 0; color: #3b82f6; }
 
+/* ─── Floating compliance button (Outlook fallback) ──────────────────────── */
+#cg-scan-btn.cg-floating-btn {
+  position: fixed;
+  bottom: 80px;
+  right: 24px;
+  z-index: 999997;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.18);
+  border-radius: 8px;
+}
+
 /* ─── Panneau principal ───────────────────────────────────────────────────── */
 #cg-panel {
   position: fixed;
   bottom: 80px;
   left: 280px;
-  width: 360px;
-  max-height: 80vh;
+  width: 380px;
+  max-height: 88vh;
   background: #ffffff;
   border: 1px solid #e2e8f0;
   border-radius: 12px;
@@ -61,11 +71,13 @@
 .cg-logo {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 14px;
-  font-weight: 600;
-  color: #ffffff;
-  letter-spacing: -0.01em;
+}
+.cg-logo-img {
+  height: 28px;
+  width: auto;
+  object-fit: contain;
+  border-radius: 4px;
+  filter: brightness(0) invert(1);
 }
 
 .cg-close-btn {
@@ -147,47 +159,66 @@
   text-decoration: none;
 }
 
-/* ─── Section score ───────────────────────────────────────────────────────── */
-.cg-score-section {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 16px;
-  border-bottom: 1px solid #f1f5f9;
+.cg-summary-pad { margin: 0; padding: 12px 16px; font-size: 12px; color: #64748b; line-height: 1.45; border-bottom: 1px solid #f1f5f9; }
+.cg-issues-body { padding-bottom: 4px; }
+
+/* Applied skills — collapsible <details> element, collapsed by default */
+.cg-skills-strip {
+  padding: 0 16px;
+  border-bottom: 1px solid #e2e8f0;
   background: #f8fafc;
-  flex-shrink: 0;
 }
-.cg-score-ring {
-  flex-shrink: 0;
-  width: 56px;
-  height: 56px;
-  border-radius: 50%;
-  border: 3px solid;
+
+.cg-skills-summary {
   display: flex;
   align-items: center;
-  justify-content: center;
-}
-.cg-score-ring.cg-score-high   { border-color: #ef4444; background: #fef2f2; }
-.cg-score-ring.cg-score-medium { border-color: #f59e0b; background: #fffbeb; }
-.cg-score-ring.cg-score-low    { border-color: #22c55e; background: #f0fdf4; }
-.cg-score-num {
-  font-size: 18px;
-  font-weight: 700;
-  line-height: 1;
-}
-.cg-score-ring.cg-score-high   .cg-score-num { color: #ef4444; }
-.cg-score-ring.cg-score-medium .cg-score-num { color: #f59e0b; }
-.cg-score-ring.cg-score-low    .cg-score-num { color: #22c55e; }
-.cg-score-info { flex: 1; min-width: 0; }
-.cg-score-label {
-  font-size: 12px;
+  gap: 6px;
+  padding: 10px 0;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  font-size: 11px;
   font-weight: 600;
-  margin: 0 0 4px 0;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #94a3b8;
 }
-.cg-score-label-high   { color: #dc2626; }
-.cg-score-label-medium { color: #d97706; }
-.cg-score-label-low    { color: #16a34a; }
-.cg-summary { margin: 0; font-size: 12px; color: #64748b; line-height: 1.45; }
+
+.cg-skills-summary::-webkit-details-marker,
+.cg-skills-summary::marker { display: none; }
+
+.cg-skills-summary-label { flex: 1; }
+
+.cg-skills-summary::after {
+  content: "▸";
+  font-size: 10px;
+  color: #94a3b8;
+  transition: transform 0.15s;
+  flex-shrink: 0;
+}
+
+.cg-skills-strip[open] .cg-skills-summary::after {
+  transform: rotate(90deg);
+}
+
+.cg-skill-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-bottom: 10px;
+}
+
+.cg-skill-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid #bfdbfe;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 10px;
+  font-weight: 600;
+}
 
 /* ─── Bannière de correction ──────────────────────────────────────────────── */
 .cg-correction-banner {
@@ -195,14 +226,17 @@
   align-items: center;
   gap: 8px;
   padding: 10px 16px;
-  background: #f0fdf4;
-  border-bottom: 1px solid #bbf7d0;
+  border-bottom: 1px solid;
   font-size: 12px;
   font-weight: 500;
-  color: #16a34a;
   flex-shrink: 0;
 }
-.cg-correction-banner svg { flex-shrink: 0; color: #22c55e; }
+.cg-correction-critical { background: #fef2f2; border-color: #fecaca; color: #dc2626; }
+.cg-correction-critical svg { color: #ef4444; }
+.cg-correction-warning  { background: #fffbeb; border-color: #fde68a; color: #d97706; }
+.cg-correction-warning  svg { color: #f59e0b; }
+.cg-correction-ok       { background: #f0fdf4; border-color: #bbf7d0; color: #16a34a; }
+.cg-correction-ok       svg { color: #22c55e; }
 .cg-correction-btn {
   margin-left: auto;
   padding: 4px 12px;
@@ -250,9 +284,10 @@
   font-weight: 600;
   margin: 8px 0 6px 0;
 }
-.cg-group-critical { color: #dc2626; }
-.cg-group-warning  { color: #d97706; }
-.cg-group-info     { color: #2563eb; }
+.cg-group-critical   { color: #dc2626; }
+.cg-group-warning    { color: #d97706; }
+.cg-group-info       { color: #2563eb; }
+.cg-group-zero-risk  { color: #16a34a; }
 
 /* ─── Problèmes ───────────────────────────────────────────────────────────── */
 .cg-issue {
@@ -261,9 +296,10 @@
   margin-bottom: 6px;
   border-left: 3px solid;
 }
-.cg-issue-critical { background: #fef2f2;  border-color: #ef4444; }
-.cg-issue-warning  { background: #fffbeb;  border-color: #f59e0b; }
-.cg-issue-info     { background: #eff6ff;  border-color: #3b82f6; }
+.cg-issue-critical   { background: #fef2f2;  border-color: #ef4444; }
+.cg-issue-warning    { background: #fffbeb;  border-color: #f59e0b; }
+.cg-issue-info       { background: #eff6ff;  border-color: #3b82f6; }
+.cg-issue-zero-risk  { background: #f0fdf4;  border-color: #22c55e; }
 .cg-issue-top {
   display: flex;
   justify-content: space-between;
@@ -321,7 +357,12 @@
   border-color: #60a5fa;
 }
 
-/* ─── Mentions légales ────────────────────────────────────────────────────── */
+.cg-issue-focus-btn:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
+/* ─── Legal disclaimers ───────────────────────────────────────────────────── */
 .cg-disclaimer {
   background: #f8fafc;
   border: 1px solid #e2e8f0;
@@ -485,7 +526,7 @@
 }
 .cg-toast-dismiss:hover { color: #64748b; }
 
-/* ─── Soulignage inline dans la zone de rédaction ─────────────────────────── */
+/* ─── Inline highlighting in the compose area ────────────────────────────── */
 .cg-inline-issue {
   border-radius: 4px;
   text-decoration-line: underline;
@@ -513,6 +554,18 @@
   box-shadow: inset 0 -1px 0 rgba(59, 130, 246, 0.18);
 }
 
+.cg-inline-issue-zero-risk {
+  background: rgba(34, 197, 94, 0.10);
+  text-decoration-color: #22c55e;
+  box-shadow: inset 0 -1px 0 rgba(34, 197, 94, 0.18);
+}
+
+.cg-inline-issue-hover {
+  outline: 2px solid currentColor;
+  outline-offset: 1px;
+  filter: brightness(1.15);
+}
+
 .cg-inline-issue-pulse {
   animation: cg-inline-pulse 1.2s ease;
 }
@@ -521,4 +574,169 @@
   0% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.35); }
   70% { box-shadow: 0 0 0 8px rgba(59, 130, 246, 0); }
   100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0); }
+}
+
+/* ─── Attachment rows (inside the collapsible details section) ────────────── */
+.cg-attachments-body {
+  padding-bottom: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cg-attachment-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  padding: 4px 0;
+}
+
+.cg-attachment-icon {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.cg-attachment-ok   .cg-attachment-icon { color: #16a34a; }
+.cg-attachment-error .cg-attachment-icon { color: #ef4444; }
+
+.cg-attachment-name {
+  flex: 1;
+  color: #1e293b;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cg-attachment-status {
+  flex-shrink: 0;
+  color: #94a3b8;
+  font-size: 10px;
+}
+
+.cg-attachment-error .cg-attachment-status { color: #ef4444; }
+
+/* Badge variant for warnings (e.g. attachment read errors) */
+.cg-badge-warn {
+  background: #fef2f2;
+  color: #ef4444;
+}
+
+/* ─── Footer re-analyse indicator ─────────────────────────────────────────── */
+.cg-footer-updating {
+  color: #3b82f6;
+  font-style: italic;
+}
+
+.cg-footer-dots::after {
+  content: "";
+  animation: cg-dots 1.2s steps(4, end) infinite;
+}
+
+@keyframes cg-dots {
+  0%   { content: ""; }
+  25%  { content: "."; }
+  50%  { content: ".."; }
+  75%  { content: "..."; }
+  100% { content: ""; }
+}
+
+/* ─── Dark mode (follows OS/browser preference) ───────────────────────────── */
+@media (prefers-color-scheme: dark) {
+  #cg-scan-btn {
+    background: #1e293b;
+    color: #93c5fd;
+    border-color: #334155;
+  }
+  #cg-scan-btn:hover {
+    background: #273549;
+    border-color: #60a5fa;
+    color: #bfdbfe;
+  }
+  #cg-scan-btn svg { color: #60a5fa; }
+
+  #cg-panel {
+    background: #0f172a;
+    border-color: #1e293b;
+    color: #e2e8f0;
+    box-shadow: 0 4px 6px -1px rgba(0,0,0,0.4), 0 10px 40px -4px rgba(0,0,0,0.5);
+  }
+
+  .cg-summary-pad { color: #94a3b8; border-bottom-color: #1e293b; }
+
+  .cg-spinner { border-color: #1e293b; border-top-color: #60a5fa; }
+  .cg-loading-title { color: #cbd5e1; }
+
+  .cg-error { color: #f87171; }
+  .cg-error p { color: #94a3b8; }
+  .cg-settings-link { background: #1e293b; color: #93c5fd; border-color: #334155; }
+
+  .cg-skills-strip { background: #0f172a; border-bottom-color: #1e293b; }
+  .cg-skills-summary { color: #64748b; }
+  .cg-skills-summary::after { color: #64748b; }
+
+  .cg-skill-chip { background: #1e2d45; border-color: #334155; color: #93c5fd; }
+
+  .cg-correction-critical { background: #1f0a0a; border-color: #7f1d1d; color: #f87171; }
+  .cg-correction-warning  { background: #1c1200; border-color: #78350f; color: #fbbf24; }
+  .cg-correction-ok       { background: #052e16; border-color: #14532d; color: #4ade80; }
+  .cg-correction-btn { background: #16a34a; }
+  .cg-correction-btn:hover { background: #15803d; }
+
+  .cg-section { border-bottom-color: #1e293b; }
+  .cg-section-title { color: #64748b; }
+  .cg-badge { background: #1e293b; color: #94a3b8; }
+  .cg-badge-warn { background: #2d1515; color: #f87171; }
+
+  .cg-group-critical  { color: #f87171; }
+  .cg-group-warning   { color: #fbbf24; }
+  .cg-group-info      { color: #60a5fa; }
+  .cg-group-zero-risk { color: #4ade80; }
+
+  .cg-issue-critical  { background: #1f0a0a; border-color: #ef4444; }
+  .cg-issue-warning   { background: #1c1200; border-color: #f59e0b; }
+  .cg-issue-info      { background: #0c1a2e; border-color: #3b82f6; }
+  .cg-issue-zero-risk { background: #071a10; border-color: #22c55e; }
+  .cg-issue-type  { color: #e2e8f0; }
+  .cg-issue-reg   { color: #64748b; }
+  .cg-issue-desc  { color: #94a3b8; }
+  .cg-issue-quote { color: #64748b; border-left-color: #1e293b; }
+
+  .cg-issue-focus-btn { background: #0f172a; border-color: #334155; color: #93c5fd; }
+  .cg-issue-focus-btn:hover { background: #1e293b; border-color: #60a5fa; }
+
+  .cg-disclaimer { background: #1e293b; border-color: #334155; }
+  .cg-disclaimer-reg { color: #60a5fa; }
+  .cg-disclaimer-jur { color: #64748b; }
+  .cg-disclaimer-text { color: #94a3b8; }
+  .cg-copy-btn { background: #0f172a; border-color: #334155; color: #94a3b8; }
+  .cg-copy-btn:hover { background: #1e293b; border-color: #475569; color: #cbd5e1; }
+
+  .cg-clean { color: #4ade80; }
+  .cg-clean svg { color: #22c55e; }
+
+  .cg-footer { background: #0f172a; border-top-color: #1e293b; color: #475569; }
+
+  #cg-panel > *:not(.cg-header):not(.cg-footer)::-webkit-scrollbar-thumb { background: #1e293b; }
+
+  #cg-toast {
+    background: #0f172a;
+    border-color: #1e293b;
+    color: #e2e8f0;
+    box-shadow: 0 4px 6px -1px rgba(0,0,0,0.4), 0 10px 24px -4px rgba(0,0,0,0.5);
+  }
+  .cg-toast-icon { background: #2d1f00; color: #fbbf24; }
+  .cg-toast-title { color: #e2e8f0; }
+  .cg-toast-counts { color: #94a3b8; }
+  .cg-toast-accept { background: #1e40af; }
+  .cg-toast-accept:hover { background: #1d4ed8; }
+  .cg-toast-details { background: #1e293b; color: #94a3b8; }
+  .cg-toast-details:hover { background: #273549; color: #e2e8f0; }
+  .cg-toast-dismiss { color: #475569; }
+  .cg-toast-dismiss:hover { color: #94a3b8; }
+
+  .cg-attachment-name { color: #cbd5e1; }
+  .cg-attachment-status { color: #64748b; }
 }

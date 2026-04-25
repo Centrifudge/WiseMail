@@ -10,6 +10,7 @@
 - 🛡 **Multi-jurisdiction** — covers MiFID II (EU), SEC/FINRA (US), FCA (UK), ASIC (AU), GDPR
 - 📋 **Auto-disclaimer generation** — generates the exact legally-required disclaimer text, ready to copy or insert
 - 🔵 **GDPR flagging** — detects names, emails, and personal data that may require consent handling
+- 🟢 **Spelling & grammar** — flags typos and grammar mistakes as zero-risk suggestions with one-click corrections
 - ⚡ **Keyboard shortcut** — `Alt+Shift+C` to scan any email instantly
 - 📧 **Gmail + Outlook Web** — works on both major webmail clients
 
@@ -63,6 +64,7 @@
 | 🔴 Red (Critical) | Must fix before sending — regulatory violation |
 | 🟡 Yellow (Warning) | Should fix — potential compliance issue |
 | 🔵 Blue (Info) | Informational — best practice suggestion |
+| 🟢 Green (Zero-risk) | Spelling / grammar suggestion — no compliance impact |
 
 The **risk score (0–100)** represents overall compliance risk. Scores above 70 indicate high regulatory exposure.
 
@@ -121,6 +123,7 @@ The **risk score (0–100)** represents overall compliance risk. Scores above 70
 
 ## Roadmap
 
+- [x] Spelling & grammar suggestions (zero-risk, green)
 - [ ] Chrome/Edge support (MV3 migration)
 - [ ] Custom rule sets per firm
 - [ ] Bulk email scanning

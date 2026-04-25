@@ -1,10 +1,10 @@
 {
   "manifest_version": 2,
-  "name": "ComplianceGuard",
+  "name": "WiseMail",
   "version": "1.1.0",
   "browser_specific_settings": {
     "gecko": {
-      "id": "complianceguard@extension",
+      "id": "wisemail@extension",
       "strict_min_version": "109.0"
     }
   },
@@ -33,7 +33,9 @@
         "*://mail.google.com/*",
         "*://outlook.live.com/*",
         "*://outlook.office.com/*",
-        "*://outlook.office365.com/*"
+        "*://outlook.office365.com/*",
+        "*://outlook.cloud.microsoft/*",
+        "*://*.outlook.com/*"
       ],
       "js": ["content/content.js"],
       "css": ["content/content.css"],
@@ -41,11 +43,12 @@
     }
   ],
   "background": {
-    "scripts": ["background/system-prompt.js", "background/background.js"],
+    "scripts": ["background/system-prompt.js", "background/skills-library.js", "background/background.js"],
     "persistent": false
   },
   "options_ui": {
     "page": "options/options.html",
     "browser_style": false
-  }
+  },
+  "web_accessible_resources": ["icons/logo.jpeg", "icons/icon48.png", "icons/icon96.png"]
 }

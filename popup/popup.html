@@ -2,12 +2,13 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <title>ComplianceGuard</title>
+  <title>WiseMail</title>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
-      width: 300px;
+      width: 340px;
+      min-height: 320px;
       background: #0a0f1e;
       color: #cbd5e1;
       font-family: 'IBM Plex Sans', sans-serif;
@@ -15,7 +16,7 @@
     }
 
     .header {
-      padding: 16px;
+      padding: 18px 20px;
       background: #080d1a;
       border-bottom: 1px solid #1e293b;
       display: flex;
@@ -24,12 +25,9 @@
     }
 
     .logo {
-      font-family: 'IBM Plex Mono', monospace;
-      font-size: 14px;
-      font-weight: 600;
-      color: #3b82f6;
-      letter-spacing: 0.05em;
       flex: 1;
+      display: flex;
+      align-items: center;
     }
 
     .version {
@@ -38,7 +36,7 @@
       color: #334155;
     }
 
-    .body { padding: 16px; }
+    .body { padding: 20px; }
 
     .status-row {
       display: flex;
@@ -147,7 +145,7 @@
 </head>
 <body>
   <div class="header">
-    <div class="logo">⚖ ComplianceGuard</div>
+    <div class="logo"><img src="../icons/logo.jpeg" alt="WiseMail" style="height:32px;width:auto;object-fit:contain;filter:brightness(0) invert(1);"></div>
     <span class="version">v1.0</span>
   </div>
 
