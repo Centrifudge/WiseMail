@@ -41,7 +41,7 @@
     }
   ],
   "background": {
-    "scripts": ["background/background.js"],
+    "scripts": ["background/system-prompt.js", "background/background.js"],
     "persistent": false
   },
   "options_ui": {

@@ -84,89 +84,14 @@ async function getExtensionSettings() {
 // ─── Prompt système ───────────────────────────────────────────────────────────
 
 /**
- * Instructions envoyées à l'IA avant chaque analyse.
- *
- * Le prompt demande à l'IA de retourner UNIQUEMENT du JSON valide
- * (pas de markdown, pas de blocs de code) afin de faciliter le parsing.
- *
- * Structure de réponse attendue :
- *   {
- *     riskScore          : entier 0-100
- *     issues             : liste des problèmes détectés (type, severity, description, quote, regulation)
- *     requiredDisclaimers: mentions légales à insérer (id, text, regulation, jurisdiction)
- *     correctedEmail     : version complète de l'e-mail avec corrections intégrées
- *     summary            : résumé en une phrase
- *   }
- *
- * Types de problèmes reconnus :
- *   MENTION_PERFORMANCES_PASSEES | GARANTIE_RENDEMENT | ABSENCE_MISE_EN_GARDE
- *   VIOLATION_RGPD | INFORMATION_TROMPEUSE | ABSENCE_MENTION_AMF
- *   VIOLATION_LCBFT | CONFLIT_INTERETS | MANQUEMENT_REGLEMENTAIRE
+ * Le prompt système vit maintenant dans background/system-prompt.js pour être
+ * éditable sans modifier ce fichier métier.
  */
-const SYSTEM_PROMPT = `Tu es ComplianceGuard, un expert en conformité réglementaire pour les communications financières, spécialisé dans le droit français et européen.
+const SYSTEM_PROMPT = globalThis.COMPLIANCEGUARD_SYSTEM_PROMPT;
 
-Analyse l'e-mail financier fourni et identifie les problèmes de conformité. Retourne UNIQUEMENT un objet JSON valide (sans markdown, sans blocs de code) avec cette structure exacte :
-
-{
-  "riskScore": <entier 0-100>,
-  "issues": [
-    {
-      "type": "MENTION_PERFORMANCES_PASSEES" | "GARANTIE_RENDEMENT" | "ABSENCE_MISE_EN_GARDE" | "VIOLATION_RGPD" | "INFORMATION_TROMPEUSE" | "ABSENCE_MENTION_AMF" | "VIOLATION_LCBFT" | "CONFLIT_INTERETS" | "MANQUEMENT_REGLEMENTAIRE",
-      "severity": "critical" | "warning" | "info",
-      "description": "<explication courte en français>",
-      "quote": "<texte exact de l'e-mail qui a déclenché ce problème, ou chaîne vide>",
-      "regulation": "<nom de la réglementation, ex. : AMF DOC-2012-17, Art. L533-12 CMF, RGPD Art. 6, MIF II Art. 24>"
-    }
-  ],
-  "requiredDisclaimers": [
-    {
-      "id": "<id court unique>",
-      "text": "<texte complet de la mention légale à ajouter>",
-      "regulation": "<nom de la réglementation>",
-      "jurisdiction": "<FR|EU|Global>"
-    }
-  ],
-  "correctedEmail": "<version corrigée complète de l'e-mail avec les mentions légales intégrées, ou chaîne vide si aucune correction n'est nécessaire>",
-  "summary": "<résumé en une phrase du statut de conformité global>"
+if (!SYSTEM_PROMPT) {
+  throw new Error("ComplianceGuard system prompt is missing. Expected background/system-prompt.js to define globalThis.COMPLIANCEGUARD_SYSTEM_PROMPT.");
 }
-
-Réglementations à vérifier en priorité :
-
-1. AMF (Autorité des marchés financiers) :
-   - Toute mention de performances passées doit être suivie de : "Les performances passées ne préjugent pas des performances futures."
-   - Interdiction des garanties de rendement ou de capital
-   - Obligation d'information claire sur les risques
-   - DOC-2012-17 : Communications commerciales
-
-2. Code monétaire et financier (CMF) :
-   - Art. L533-12 : Information client honnête, claire et non trompeuse
-   - Art. L533-22 : Gestion des conflits d'intérêts
-   - Art. L533-24 : Compte-rendu au client
-
-3. MIF II / MiFID II (transposé en droit français) :
-   - Art. 24 : Exigences d'information
-   - Art. 25 : Adéquation et caractère approprié
-   - Mentions obligatoires pour les communications commerciales
-
-4. RGPD (Règlement Général sur la Protection des Données) :
-   - Toute mention de données personnelles (nom, e-mail, numéro de compte) doit être signalée
-   - Base légale du traitement
-   - Droits des personnes
-
-5. LCB-FT (Lutte contre le blanchiment de capitaux et le financement du terrorisme) :
-   - Ordonnance n° 2016-1635
-   - Vigilance sur les transactions suspectes
-
-6. PRIIPS :
-   - Obligation de KID (document d'informations clés) pour les produits packagés
-
-7. Règles générales :
-   - Toute affirmation non étayée sur les rendements futurs
-   - Absence de mention des risques de perte en capital
-   - Publicité trompeuse ou mensongère
-
-Contexte de l'expéditeur : Le domaine de l'expéditeur est fourni — s'il s'agit d'une entité financière réglementée, applique des règles plus strictes.
-`;
 
 // ─── Routeur de messages ──────────────────────────────────────────────────────
 
@@ -183,12 +108,16 @@ browser.runtime.onMessage.addListener((message) => {
     return analyzeEmail(
       message.emailText,
       message.jurisdiction,
+      message.subjectText,
       message.recipientEmail,
       message.senderDomain
     );
   }
   if (message.type === "GET_SETTINGS") {
     return getExtensionSettings();
+  }
+  if (message.type === "OPEN_SETTINGS") {
+    return browser.runtime.openOptionsPage();
   }
 });
 
@@ -201,11 +130,12 @@ browser.runtime.onMessage.addListener((message) => {
  *
  * @param {string} emailText     - Corps de l'e-mail à analyser
  * @param {string} jurisdiction  - Code juridiction (FR, EU, US…)
+ * @param {string} subjectText   - Objet actuel de l'e-mail (peut être vide)
  * @param {string} recipientEmail - Adresse e-mail du destinataire (peut être vide)
  * @param {string} senderDomain  - Domaine de l'expéditeur, ex. "margot-groupe.com" (non sensible)
  * @returns {Promise<{success: boolean, result: object}|{error: string, message: string}>}
  */
-async function analyzeEmail(emailText, jurisdiction = "FR", recipientEmail = "", senderDomain = "") {
+async function analyzeEmail(emailText, jurisdiction = "FR", subjectText = "", recipientEmail = "", senderDomain = "") {
   const settings = await getExtensionSettings();
 
   const apiKey   = settings.apiKey;
@@ -220,10 +150,12 @@ async function analyzeEmail(emailText, jurisdiction = "FR", recipientEmail = "",
 
   // Contexte additionnel transmis à l'IA pour affiner l'analyse :
   // - la juridiction oriente les réglementations prioritaires
+  // - l'objet permet à l'IA de proposer une correction distincte du corps
   // - le destinataire permet de détecter si l'e-mail est envoyé à un client retail ou professionnel
   // - le domaine expéditeur aide à identifier une entité financière réglementée
   const contextLines = [];
   if (jurisdiction)   contextLines.push(`Juridiction principale : ${jurisdiction}`);
+  if (subjectText)    contextLines.push(`Objet actuel : ${subjectText}`);
   if (recipientEmail) contextLines.push(`Destinataire : ${recipientEmail}`);
   if (senderDomain)   contextLines.push(`Domaine expéditeur : ${senderDomain} (informations non sensibles)`);
 
