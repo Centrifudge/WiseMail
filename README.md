@@ -99,7 +99,7 @@ The **risk score (0–100)** represents overall compliance risk. Scores above 70
 ## Architecture
 
 ```
-compliance-extension/
+.
 ├── manifest.json          # Extension manifest (MV2, Firefox-compatible)
 ├── background/
 │   └── background.js      # Gemini API calls, message routing
