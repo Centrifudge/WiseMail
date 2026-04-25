@@ -8,6 +8,7 @@ const PROVIDER_DEFAULTS = {
 };
 
 const PROVIDER_FOR_MODEL = {
+  "gemini-2.0-flash-lite":       "google",
   "gemini-3.1-pro-preview":      "google",
   "gemini-3.1-flash-lite-preview": "google",
   "gemini-3-flash":              "google",
@@ -44,7 +45,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   document.getElementById("endpoint").value = savedEndpoint;
 
   // Model
-  const savedModel = settings.model || "gemini-3.1-pro-preview";
+  const savedModel = settings.model || "gemini-2.0-flash-lite";
   const modelSelect = document.getElementById("modelPreset");
   const knownValues = Array.from(modelSelect.options).map(o => o.value);
   if (knownValues.includes(savedModel)) {

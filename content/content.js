@@ -1,50 +1,68 @@
-// content.js — injects ComplianceGuard UI into Gmail and Outlook
+// content.js — ComplianceGuard injecté dans Gmail
 
 (function () {
   "use strict";
 
   let activePanel = null;
-  let scanButton = null;
-  let currentEmailText = "";
+  let activeToast = null;
+  let debounceTimer = null;
+  let lastAnalyzedText = "";
+  let isAnalyzing = false;
 
-  // ─── Detect email client ───────────────────────────────────────────────────
+  // ─── Détection du client mail ──────────────────────────────────────────────
   function getEmailClient() {
     if (location.hostname.includes("mail.google.com")) return "gmail";
     if (location.hostname.includes("outlook")) return "outlook";
     return "unknown";
   }
 
-  // ─── Extract email body text ───────────────────────────────────────────────
+  // ─── Extraction du corps de l'e-mail ──────────────────────────────────────
   function extractEmailText() {
-    const client = getEmailClient();
-
-    if (client === "gmail") {
-      // Gmail compose window
+    if (getEmailClient() === "gmail") {
       const compose = document.querySelector('[role="textbox"][aria-label*="Message Body"], [g_editable="true"], .Am.Al.editable');
       if (compose) return compose.innerText || compose.textContent || "";
-
-      // Gmail reading pane
-      const reading = document.querySelector('.ii.gt .a3s.aiL, .a3s.aXjCH');
-      if (reading) return reading.innerText || "";
-
-      // Subject + body
       const subject = document.querySelector('h2.hP');
       const body = document.querySelector('.ii.gt');
       if (body) return (subject?.innerText || "") + "\n" + body.innerText;
     }
-
-    if (client === "outlook") {
+    if (getEmailClient() === "outlook") {
       const compose = document.querySelector('[aria-label="Message body, press Alt+F10 to exit"], .dFCbN');
       if (compose) return compose.innerText || "";
-
       const reading = document.querySelector('[role="document"] .allowTextSelection');
       if (reading) return reading.innerText || "";
     }
-
     return "";
   }
 
-  // ─── Find compose toolbar (Gmail) ─────────────────────────────────────────
+  // ─── Extraction de l'e-mail du destinataire ───────────────────────────────
+  function extractRecipientEmail() {
+    // Cherche dans la fenêtre de composition Gmail
+    const toChips = document.querySelectorAll('.vO[data-hovercard-id], .aB .vO');
+    for (const chip of toChips) {
+      const email = chip.dataset.hovercardId || chip.getAttribute('email');
+      if (email && email.includes('@')) return email;
+    }
+    // Fallback : cherche via aria-label "À"
+    const toField = document.querySelector('[aria-label="À"], [aria-label="To"], [name="to"]');
+    if (toField) {
+      const match = toField.value?.match(/[\w.-]+@[\w.-]+\.\w+/);
+      if (match) return match[0];
+    }
+    return "";
+  }
+
+  // ─── Domaine de l'expéditeur (non sensible) ───────────────────────────────
+  function getSenderDomain() {
+    // Extrait le domaine à partir de l'adresse Gmail connectée
+    const accountEl = document.querySelector('[data-email]');
+    if (accountEl) {
+      const email = accountEl.dataset.email;
+      if (email && email.includes('@')) return email.split('@')[1];
+    }
+    return "";
+  }
+
+  // ─── Barre d'outils de la fenêtre de composition ─────────────────────────
   function findComposeToolbar() {
     return (
       document.querySelector('.btC .gU.Up') ||
@@ -53,54 +71,185 @@
     );
   }
 
-  // ─── Inject scan button into compose toolbar ───────────────────────────────
+  // ─── Injection du bouton dans la barre d'outils ───────────────────────────
   function injectScanButton(toolbar) {
     if (document.getElementById("cg-scan-btn")) return;
 
-    scanButton = document.createElement("div");
-    scanButton.id = "cg-scan-btn";
-    scanButton.title = "ComplianceGuard: Scan for compliance issues";
-    scanButton.innerHTML = `
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-        <path d="M12 2L3 7v5c0 5.25 3.75 10.15 9 11.35C17.25 22.15 21 17.25 21 12V7L12 2z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
-        <path d="M9 12l2 2 4-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    const btn = document.createElement("button");
+    btn.id = "cg-scan-btn";
+    btn.title = "ComplianceGuard — Vérifier la conformité";
+    btn.innerHTML = `
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+        <path d="M12 2L3 7v5c0 5.25 3.75 10.15 9 11.35C17.25 22.15 21 17.25 21 12V7L12 2z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+        <path d="M9 12l2 2 4-4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
-      <span>Compliance</span>
+      Conformité
     `;
-
-    scanButton.addEventListener("click", (e) => {
+    btn.addEventListener("click", (e) => {
       e.stopPropagation();
-      triggerScan();
+      removeToast();
+      triggerScan(true);
     });
-
-    toolbar.appendChild(scanButton);
+    toolbar.appendChild(btn);
   }
 
-  // ─── Main scan trigger ─────────────────────────────────────────────────────
-  async function triggerScan() {
-    const text = extractEmailText();
-    currentEmailText = text;
+  // ─── Écoute de la frappe dans la fenêtre de composition ───────────────────
+  function attachComposeListener() {
+    const compose = document.querySelector('[role="textbox"][aria-label*="Message Body"], [g_editable="true"], .Am.Al.editable');
+    if (!compose || compose.dataset.cgListening) return;
+    compose.dataset.cgListening = "true";
 
-    if (!text || text.trim().length < 20) {
-      showPanel({ error: "EMPTY", message: "No email content detected. Please open or compose an email first." });
-      return;
-    }
+    compose.addEventListener("input", () => {
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        const text = compose.innerText || compose.textContent || "";
+        if (text.trim().length >= 30 && text !== lastAnalyzedText && !isAnalyzing) {
+          triggerAutoScan(text);
+        }
+      }, 2000);
+    });
+  }
 
-    showPanel({ loading: true, emailText: text });
+  // ─── Scan automatique (discret) ───────────────────────────────────────────
+  async function triggerAutoScan(text) {
+    if (isAnalyzing) return;
+    isAnalyzing = true;
+    lastAnalyzedText = text;
 
     const settings = await browser.runtime.sendMessage({ type: "GET_SETTINGS" });
-    const jurisdiction = settings.jurisdiction || "EU";
+    if (!settings.apiKey) { isAnalyzing = false; return; }
 
     const response = await browser.runtime.sendMessage({
       type: "ANALYZE_EMAIL",
       emailText: text,
-      jurisdiction
+      jurisdiction: settings.jurisdiction || "FR",
+      recipientEmail: extractRecipientEmail(),
+      senderDomain: getSenderDomain()
     });
 
-    showPanel({ loading: false, ...response, emailText: text });
+    isAnalyzing = false;
+
+    if (response.success && response.result) {
+      const r = response.result;
+      const critical = (r.issues || []).filter(i => i.severity === "critical").length;
+      const warnings = (r.issues || []).filter(i => i.severity === "warning").length;
+      if (critical > 0 || warnings > 0) {
+        showCorrectionToast(r);
+      }
+    }
   }
 
-  // ─── Panel rendering ───────────────────────────────────────────────────────
+  // ─── Scan manuel (ouvre le panneau complet) ───────────────────────────────
+  async function triggerScan(showFullPanel = true) {
+    const text = extractEmailText();
+    if (!text || text.trim().length < 20) {
+      if (showFullPanel) showPanel({ error: "EMPTY", message: "Aucun contenu d'e-mail détecté. Rédigez ou ouvrez un e-mail." });
+      return;
+    }
+
+    if (showFullPanel) showPanel({ loading: true });
+
+    const settings = await browser.runtime.sendMessage({ type: "GET_SETTINGS" });
+
+    const response = await browser.runtime.sendMessage({
+      type: "ANALYZE_EMAIL",
+      emailText: text,
+      jurisdiction: settings.jurisdiction || "FR",
+      recipientEmail: extractRecipientEmail(),
+      senderDomain: getSenderDomain()
+    });
+
+    if (showFullPanel) showPanel({ ...response, emailText: text });
+  }
+
+  // ─── Toast de suggestion (auto-scan) ──────────────────────────────────────
+  function showCorrectionToast(result) {
+    removeToast();
+
+    const critical = (result.issues || []).filter(i => i.severity === "critical").length;
+    const warnings = (result.issues || []).filter(i => i.severity === "warning").length;
+    const hasCorrection = result.correctedEmail && result.correctedEmail.length > 10;
+    const hasDisclaimers = result.requiredDisclaimers?.length > 0;
+
+    const parts = [];
+    if (critical > 0) parts.push(`<span class="cg-toast-critical">${critical} critique${critical > 1 ? "s" : ""}</span>`);
+    if (warnings > 0) parts.push(`<span class="cg-toast-warning">${warnings} avertissement${warnings > 1 ? "s" : ""}</span>`);
+
+    activeToast = document.createElement("div");
+    activeToast.id = "cg-toast";
+    activeToast.innerHTML = `
+      <div class="cg-toast-icon">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+          <path d="M12 2L3 7v5c0 5.25 3.75 10.15 9 11.35C17.25 22.15 21 17.25 21 12V7L12 2z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+          <path d="M12 8v4m0 4h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+      </div>
+      <div class="cg-toast-body">
+        <p class="cg-toast-title">Problèmes de conformité détectés</p>
+        <p class="cg-toast-counts">${parts.join(" · ")}</p>
+      </div>
+      <div class="cg-toast-actions">
+        ${(hasCorrection || hasDisclaimers) ? `<button class="cg-toast-btn cg-toast-accept" id="cg-toast-accept">Corriger</button>` : ""}
+        <button class="cg-toast-btn cg-toast-details" id="cg-toast-details">Détails</button>
+        <button class="cg-toast-btn cg-toast-dismiss" id="cg-toast-close">✕</button>
+      </div>
+    `;
+
+    document.body.appendChild(activeToast);
+
+    activeToast.querySelector("#cg-toast-close")?.addEventListener("click", removeToast);
+
+    activeToast.querySelector("#cg-toast-accept")?.addEventListener("click", () => {
+      if (result.correctedEmail && result.correctedEmail.length > 10) {
+        applyEmailCorrection(result.correctedEmail);
+      } else if (result.requiredDisclaimers?.length) {
+        insertDisclaimersIntoCompose(result.requiredDisclaimers);
+      }
+      removeToast();
+    });
+
+    activeToast.querySelector("#cg-toast-details")?.addEventListener("click", () => {
+      removeToast();
+      showPanel({ success: true, result, emailText: lastAnalyzedText });
+    });
+
+    // Auto-dismiss après 12 secondes
+    setTimeout(() => { if (activeToast) removeToast(); }, 12000);
+  }
+
+  function removeToast() {
+    if (activeToast) { activeToast.remove(); activeToast = null; }
+  }
+
+  // ─── Application de la correction complète ─────────────────────────────────
+  function applyEmailCorrection(correctedText) {
+    const compose = document.querySelector('[g_editable="true"], .Am.Al.editable, [role="textbox"]');
+    if (compose) {
+      compose.focus();
+      document.execCommand("selectAll", false, null);
+      document.execCommand("insertText", false, correctedText);
+    }
+  }
+
+  // ─── Insertion des mentions légales ───────────────────────────────────────
+  function insertDisclaimersIntoCompose(disclaimers) {
+    if (!disclaimers.length) return;
+    const text = "\n\n─────────────────────────────\nMENTIONS LÉGALES OBLIGATOIRES :\n\n" +
+      disclaimers.map(d => `[${d.regulation}] ${d.text}`).join("\n\n");
+    const compose = document.querySelector('[g_editable="true"], .Am.Al.editable, [role="textbox"]');
+    if (compose) {
+      compose.focus();
+      const sel = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(compose);
+      range.collapse(false);
+      sel.removeAllRanges();
+      sel.addRange(range);
+      document.execCommand("insertText", false, text);
+    }
+  }
+
+  // ─── Panneau complet ───────────────────────────────────────────────────────
   function showPanel(state) {
     removePanel();
     activePanel = document.createElement("div");
@@ -108,59 +257,75 @@
     activePanel.innerHTML = buildPanelHTML(state);
     document.body.appendChild(activePanel);
 
-    // Wire up close button
     activePanel.querySelector("#cg-close")?.addEventListener("click", removePanel);
 
-    // Wire up copy disclaimer buttons
     activePanel.querySelectorAll(".cg-copy-btn").forEach(btn => {
       btn.addEventListener("click", () => {
-        const text = btn.dataset.text;
-        navigator.clipboard.writeText(text).then(() => {
-          btn.textContent = "Copied!";
-          setTimeout(() => btn.textContent = "Copy", 1500);
+        navigator.clipboard.writeText(btn.dataset.text).then(() => {
+          btn.textContent = "Copié !";
+          setTimeout(() => btn.textContent = "Copier", 1500);
         });
       });
     });
 
-    // Wire up insert-all disclaimers button
     activePanel.querySelector("#cg-insert-all")?.addEventListener("click", () => {
       insertDisclaimersIntoCompose(state.result?.requiredDisclaimers || []);
+    });
+
+    activePanel.querySelector("#cg-apply-correction")?.addEventListener("click", () => {
+      if (state.result?.correctedEmail) {
+        applyEmailCorrection(state.result.correctedEmail);
+        activePanel.querySelector("#cg-apply-correction").textContent = "Correction appliquée ✓";
+      }
+    });
+
+    activePanel.querySelector("#cg-open-settings")?.addEventListener("click", () => {
+      browser.runtime.sendMessage({ type: "OPEN_SETTINGS" });
     });
   }
 
   function removePanel() {
-    if (activePanel) {
-      activePanel.remove();
-      activePanel = null;
-    }
+    if (activePanel) { activePanel.remove(); activePanel = null; }
   }
 
+  // ─── Construction du HTML du panneau ──────────────────────────────────────
   function buildPanelHTML(state) {
     if (state.loading) {
       return `
         <div class="cg-header">
-          <div class="cg-logo">⚖ ComplianceGuard</div>
-          <button id="cg-close" class="cg-close-btn">✕</button>
+          <div class="cg-logo">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+              <path d="M12 2L3 7v5c0 5.25 3.75 10.15 9 11.35C17.25 22.15 21 17.25 21 12V7L12 2z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+              <path d="M9 12l2 2 4-4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            ComplianceGuard
+          </div>
+          <button id="cg-close" class="cg-close-btn" aria-label="Fermer">✕</button>
         </div>
         <div class="cg-loading">
           <div class="cg-spinner"></div>
-          <p>Analyzing for compliance issues…</p>
-          <p class="cg-sub">Checking MiFID II · SEC · FCA · GDPR</p>
+          <p class="cg-loading-title">Analyse en cours…</p>
+          <p class="cg-loading-sub">AMF · MIF II · RGPD · CMF</p>
         </div>
       `;
     }
 
     if (state.error) {
       const messages = {
-        NO_API_KEY: `<p>No API key configured.</p><p><a href="#" id="cg-open-settings">Open Settings →</a></p>`,
-        EMPTY: `<p>${state.message}</p>`,
-        API_ERROR: `<p>API error: ${state.message}</p>`,
-        PARSE_ERROR: `<p>Could not parse AI response. Try again.</p>`,
-        NETWORK_ERROR: `<p>Network error: ${state.message}</p>`
+        NO_API_KEY: `<p>Aucune clé API configurée.</p><button id="cg-open-settings" class="cg-settings-link">Ouvrir les paramètres →</button>`,
+        EMPTY:      `<p>${state.message}</p>`,
+        API_ERROR:  `<p>Erreur API : ${state.message}</p>`,
+        PARSE_ERROR:`<p>Réponse illisible. Veuillez réessayer.</p>`,
+        NETWORK_ERROR:`<p>Erreur réseau : ${state.message}</p>`
       };
       return `
         <div class="cg-header">
-          <div class="cg-logo">⚖ ComplianceGuard</div>
+          <div class="cg-logo">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+              <path d="M12 2L3 7v5c0 5.25 3.75 10.15 9 11.35C17.25 22.15 21 17.25 21 12V7L12 2z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+            </svg>
+            ComplianceGuard
+          </div>
           <button id="cg-close" class="cg-close-btn">✕</button>
         </div>
         <div class="cg-error">
@@ -171,135 +336,140 @@
     }
 
     const r = state.result;
-    if (!r) return `<div class="cg-header"><button id="cg-close" class="cg-close-btn">✕</button></div><p>No result.</p>`;
+    if (!r) return `<div class="cg-header"><button id="cg-close" class="cg-close-btn">✕</button></div><p class="cg-pad">Aucun résultat.</p>`;
 
     const score = r.riskScore ?? 0;
     const scoreClass = score >= 70 ? "high" : score >= 40 ? "medium" : "low";
-    const scoreLabel = score >= 70 ? "High Risk" : score >= 40 ? "Medium Risk" : "Low Risk";
+    const scoreLabel = score >= 70 ? "Risque élevé" : score >= 40 ? "Risque modéré" : "Conforme";
 
-    const criticalIssues = (r.issues || []).filter(i => i.severity === "critical");
-    const warningIssues = (r.issues || []).filter(i => i.severity === "warning");
-    const infoIssues = (r.issues || []).filter(i => i.severity === "info");
+    const criticals = (r.issues || []).filter(i => i.severity === "critical");
+    const warnings  = (r.issues || []).filter(i => i.severity === "warning");
+    const infos     = (r.issues || []).filter(i => i.severity === "info");
 
-    const issueIcon = { critical: "🔴", warning: "🟡", info: "🔵" };
     const typeLabel = {
-      DISCLAIMER_MISSING: "Disclaimer Missing",
-      GDPR_VIOLATION: "GDPR Violation",
-      MISLEADING_CLAIM: "Misleading Claim",
-      PAST_PERFORMANCE: "Past Performance",
-      UNSUBSTANTIATED_CLAIM: "Unsubstantiated Claim",
-      REGULATORY_BREACH: "Regulatory Breach",
-      DATA_PRIVACY: "Data Privacy"
+      MENTION_PERFORMANCES_PASSEES: "Performances passées",
+      GARANTIE_RENDEMENT:           "Garantie de rendement",
+      ABSENCE_MISE_EN_GARDE:        "Avertissement absent",
+      VIOLATION_RGPD:               "Violation RGPD",
+      INFORMATION_TROMPEUSE:        "Information trompeuse",
+      ABSENCE_MENTION_AMF:          "Mention AMF absente",
+      VIOLATION_LCBFT:              "Violation LCB-FT",
+      CONFLIT_INTERETS:             "Conflit d'intérêts",
+      MANQUEMENT_REGLEMENTAIRE:     "Manquement réglementaire",
+      DISCLAIMER_MISSING:           "Mention légale absente",
+      GDPR_VIOLATION:               "Violation RGPD",
+      DATA_PRIVACY:                 "Données personnelles"
     };
 
-    function renderIssues(issues) {
+    function renderIssues(issues, cls) {
       return issues.map(issue => `
-        <div class="cg-issue cg-issue-${issue.severity}">
-          <div class="cg-issue-header">
+        <div class="cg-issue cg-issue-${cls}">
+          <div class="cg-issue-top">
             <span class="cg-issue-type">${typeLabel[issue.type] || issue.type}</span>
             <span class="cg-issue-reg">${issue.regulation || ""}</span>
           </div>
           <p class="cg-issue-desc">${issue.description}</p>
-          ${issue.quote ? `<blockquote class="cg-issue-quote">"${issue.quote}"</blockquote>` : ""}
+          ${issue.quote ? `<blockquote class="cg-issue-quote">${issue.quote}</blockquote>` : ""}
         </div>
       `).join("");
     }
 
-    const disclaimersHTML = (r.requiredDisclaimers || []).map((d, i) => `
+    const disclaimersHTML = (r.requiredDisclaimers || []).map(d => `
       <div class="cg-disclaimer">
-        <div class="cg-disclaimer-header">
+        <div class="cg-disclaimer-top">
           <span class="cg-disclaimer-reg">${d.regulation}</span>
           <span class="cg-disclaimer-jur">${d.jurisdiction}</span>
         </div>
         <p class="cg-disclaimer-text">${d.text}</p>
-        <button class="cg-copy-btn" data-text="${d.text.replace(/"/g, '&quot;')}">Copy</button>
+        <button class="cg-copy-btn" data-text="${d.text.replace(/"/g, '&quot;')}">Copier</button>
       </div>
     `).join("");
 
+    const hasCorrection = r.correctedEmail && r.correctedEmail.length > 10;
+
     return `
       <div class="cg-header">
-        <div class="cg-logo">⚖ ComplianceGuard</div>
-        <button id="cg-close" class="cg-close-btn">✕</button>
+        <div class="cg-logo">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+            <path d="M12 2L3 7v5c0 5.25 3.75 10.15 9 11.35C17.25 22.15 21 17.25 21 12V7L12 2z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+            <path d="M9 12l2 2 4-4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          ComplianceGuard
+        </div>
+        <button id="cg-close" class="cg-close-btn" aria-label="Fermer">✕</button>
       </div>
 
-      <div class="cg-score-row">
+      <div class="cg-score-section">
         <div class="cg-score-ring cg-score-${scoreClass}">
           <span class="cg-score-num">${score}</span>
-          <span class="cg-score-label">${scoreLabel}</span>
         </div>
-        <p class="cg-summary">${r.summary || ""}</p>
+        <div class="cg-score-info">
+          <p class="cg-score-label cg-score-label-${scoreClass}">${scoreLabel}</p>
+          <p class="cg-summary">${r.summary || ""}</p>
+        </div>
       </div>
+
+      ${hasCorrection ? `
+        <div class="cg-correction-banner">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M9 12l2 2 4-4" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/></svg>
+          Une version corrigée est disponible
+          <button id="cg-apply-correction" class="cg-correction-btn">Appliquer</button>
+        </div>
+      ` : ""}
 
       ${r.issues?.length ? `
         <div class="cg-section">
-          <div class="cg-section-title">
-            Issues Found
-            <span class="cg-badge">${r.issues.length}</span>
-          </div>
-          ${criticalIssues.length ? `<div class="cg-severity-group"><p class="cg-severity-label">${issueIcon.critical} Critical (${criticalIssues.length})</p>${renderIssues(criticalIssues)}</div>` : ""}
-          ${warningIssues.length ? `<div class="cg-severity-group"><p class="cg-severity-label">${issueIcon.warning} Warnings (${warningIssues.length})</p>${renderIssues(warningIssues)}</div>` : ""}
-          ${infoIssues.length ? `<div class="cg-severity-group"><p class="cg-severity-label">${issueIcon.info} Info (${infoIssues.length})</p>${renderIssues(infoIssues)}</div>` : ""}
+          <div class="cg-section-title">Problèmes <span class="cg-badge">${r.issues.length}</span></div>
+          ${criticals.length ? `<p class="cg-group-label cg-group-critical">Critiques (${criticals.length})</p>${renderIssues(criticals, "critical")}` : ""}
+          ${warnings.length  ? `<p class="cg-group-label cg-group-warning">Avertissements (${warnings.length})</p>${renderIssues(warnings, "warning")}` : ""}
+          ${infos.length     ? `<p class="cg-group-label cg-group-info">Informations (${infos.length})</p>${renderIssues(infos, "info")}` : ""}
         </div>
-      ` : `<div class="cg-section"><p class="cg-clean">✓ No compliance issues detected</p></div>`}
+      ` : `
+        <div class="cg-section">
+          <div class="cg-clean">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M9 12l2 2 4-4" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/></svg>
+            Aucun problème de conformité détecté
+          </div>
+        </div>
+      `}
 
       ${r.requiredDisclaimers?.length ? `
         <div class="cg-section">
-          <div class="cg-section-title">
-            Required Disclaimers
-            <span class="cg-badge">${r.requiredDisclaimers.length}</span>
-          </div>
+          <div class="cg-section-title">Mentions légales obligatoires <span class="cg-badge">${r.requiredDisclaimers.length}</span></div>
           ${disclaimersHTML}
-          <button id="cg-insert-all" class="cg-insert-btn">Insert All Disclaimers Into Email</button>
+          <button id="cg-insert-all" class="cg-insert-btn">Insérer toutes les mentions</button>
         </div>
       ` : ""}
 
       <div class="cg-footer">
-        ComplianceGuard v1.0 · <a href="#" id="cg-settings-link">Settings</a>
+        ComplianceGuard · Droit français & européen
       </div>
     `;
   }
 
-  // ─── Insert disclaimers into compose window ────────────────────────────────
-  function insertDisclaimersIntoCompose(disclaimers) {
-    if (!disclaimers.length) return;
-    const client = getEmailClient();
-    const disclaimerText = "\n\n─────────────────────────────\nREQUIRED DISCLOSURES:\n\n" +
-      disclaimers.map(d => `[${d.regulation}] ${d.text}`).join("\n\n");
-
-    if (client === "gmail") {
-      const compose = document.querySelector('[g_editable="true"], .Am.Al.editable, [role="textbox"]');
-      if (compose) {
-        compose.focus();
-        const sel = window.getSelection();
-        const range = document.createRange();
-        range.selectNodeContents(compose);
-        range.collapse(false);
-        sel.removeAllRanges();
-        sel.addRange(range);
-        document.execCommand("insertText", false, disclaimerText);
-      }
-    }
-  }
-
-  // ─── Observe DOM for compose windows (Gmail dynamically creates them) ──────
+  // ─── Observation des mutations DOM ────────────────────────────────────────
   function observe() {
     const mo = new MutationObserver(() => {
       const toolbar = findComposeToolbar();
-      if (toolbar) injectScanButton(toolbar);
+      if (toolbar) {
+        injectScanButton(toolbar);
+        attachComposeListener();
+      }
     });
     mo.observe(document.body, { childList: true, subtree: true });
   }
 
-  // ─── Keyboard shortcut: Alt+Shift+C ───────────────────────────────────────
+  // ─── Raccourci clavier : Alt+Maj+C ───────────────────────────────────────
   document.addEventListener("keydown", (e) => {
     if (e.altKey && e.shiftKey && e.key === "C") {
-      triggerScan();
+      removeToast();
+      triggerScan(true);
     }
   });
 
-  // ─── Message from popup ────────────────────────────────────────────────────
+  // ─── Message du popup ─────────────────────────────────────────────────────
   browser.runtime.onMessage.addListener((msg) => {
-    if (msg.type === "TRIGGER_SCAN") triggerScan();
+    if (msg.type === "TRIGGER_SCAN") { removeToast(); triggerScan(true); }
   });
 
   observe();
