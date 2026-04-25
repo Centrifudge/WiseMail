@@ -1,7 +1,7 @@
 // background.js — ComplianceGuard, focus droit français + EU
 
 const DEFAULT_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent";
-const DEFAULT_MODEL    = "gemini-2.0-flash-lite";
+const DEFAULT_MODEL    = "gemini-3.1-flash-lite";
 
 const SYSTEM_PROMPT = `Tu es ComplianceGuard, un expert en conformité réglementaire pour les communications financières, spécialisé dans le droit français et européen.
 
