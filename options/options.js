@@ -7,14 +7,25 @@ const PROVIDER_DEFAULTS = {
   custom:    ""
 };
 
+const DEFAULT_MODEL = "gemini-3.1-flash-lite-preview";
+
+const LEGACY_MODEL_ALIASES = {
+  "gemini-3.1-flash-lite": "gemini-3.1-flash-lite-preview",
+  "gemini-3-flash": "gemini-3-flash-preview",
+};
+
 const PROVIDER_FOR_MODEL = {
-  "gemini-3.1-flash-lite":       "google",
-  "gemini-2.0-flash-lite":       "google",
+  "gemini-3.1-flash-lite-preview": "google",
   "gemini-3.1-pro-preview":      "google",
-  "gemini-3-flash":              "google",
+  "gemini-3-flash-preview":      "google",
   "gemini-2.5-pro":              "google",
   "gemini-2.5-flash":            "google",
+  "gemini-2.5-flash-lite":       "google",
   "gemini-2.0-flash":            "google",
+  "gemini-2.0-flash-lite":       "google",
+  // Legacy aliases kept so old saved settings still map to Google.
+  "gemini-3.1-flash-lite":       "google",
+  "gemini-3-flash":              "google",
   "gpt-4o":                      "openai",
   "gpt-4o-mini":                 "openai",
   "o3":                          "openai",
@@ -23,6 +34,22 @@ const PROVIDER_FOR_MODEL = {
 };
 
 let currentProvider = "google";
+
+function normalizeModelName(model = DEFAULT_MODEL) {
+  return LEGACY_MODEL_ALIASES[model] || model;
+}
+
+function normalizeEndpointTemplate(endpoint = "") {
+  let normalized = endpoint;
+  for (const [legacyModel, currentModel] of Object.entries(LEGACY_MODEL_ALIASES)) {
+    normalized = normalized.split(legacyModel).join(currentModel);
+  }
+  return normalized;
+}
+
+function shouldNormalizeGoogleSettings(provider, endpoint) {
+  return provider === "google" || endpoint.includes("generativelanguage.googleapis.com");
+}
 
 document.addEventListener("DOMContentLoaded", async () => {
   const settings = await browser.storage.local.get([
@@ -40,12 +67,16 @@ document.addEventListener("DOMContentLoaded", async () => {
   currentProvider = settings.provider || "google";
   setActiveProviderTab(currentProvider);
 
+  const rawEndpoint = settings.endpoint || PROVIDER_DEFAULTS[currentProvider];
+  const rawModel = settings.model || DEFAULT_MODEL;
+  const useGoogleNormalization = shouldNormalizeGoogleSettings(currentProvider, rawEndpoint);
+
   // Endpoint
-  const savedEndpoint = settings.endpoint || PROVIDER_DEFAULTS[currentProvider];
+  const savedEndpoint = useGoogleNormalization ? normalizeEndpointTemplate(rawEndpoint) : rawEndpoint;
   document.getElementById("endpoint").value = savedEndpoint;
 
   // Model
-  const savedModel = settings.model || "gemini-3.1-flash-lite";
+  const savedModel = useGoogleNormalization ? normalizeModelName(rawModel) : rawModel;
   const modelSelect = document.getElementById("modelPreset");
   const knownValues = Array.from(modelSelect.options).map(o => o.value);
   if (knownValues.includes(savedModel)) {
@@ -57,6 +88,17 @@ document.addEventListener("DOMContentLoaded", async () => {
   toggleCustomModel(modelSelect.value === "custom");
 
   if (settings.customModel) document.getElementById("customModel").value = settings.customModel;
+
+  const migratedSettings = {};
+  if (settings.model && settings.model !== savedModel) {
+    migratedSettings.model = savedModel;
+  }
+  if (settings.endpoint && settings.endpoint !== savedEndpoint) {
+    migratedSettings.endpoint = savedEndpoint;
+  }
+  if (Object.keys(migratedSettings).length > 0) {
+    await browser.storage.local.set(migratedSettings);
+  }
 
   // ── Provider tab clicks ───────────────────────────────────
   document.getElementById("provider-tabs").addEventListener("click", (e) => {
@@ -89,13 +131,19 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // ── Save ──────────────────────────────────────────────────
   document.getElementById("save-btn").addEventListener("click", async () => {
-    const modelVal = modelSelect.value === "custom"
+    const rawModelVal = modelSelect.value === "custom"
       ? document.getElementById("customModel").value.trim()
       : modelSelect.value;
+    const rawEndpointVal = document.getElementById("endpoint").value.trim();
+    const useSavedGoogleNormalization = shouldNormalizeGoogleSettings(currentProvider, rawEndpointVal);
+    const modelVal = useSavedGoogleNormalization ? normalizeModelName(rawModelVal) : rawModelVal;
+    const endpointVal = useSavedGoogleNormalization
+      ? normalizeEndpointTemplate(rawEndpointVal)
+      : rawEndpointVal;
 
     await browser.storage.local.set({
       apiKey:      document.getElementById("apiKey").value.trim(),
-      endpoint:    document.getElementById("endpoint").value.trim(),
+      endpoint:    endpointVal,
       provider:    currentProvider,
       model:       modelVal,
       customModel: document.getElementById("customModel").value.trim(),
