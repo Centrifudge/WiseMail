@@ -7,8 +7,8 @@
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
-      width: 340px;
-      min-height: 320px;
+      width: 420px;
+      min-height: 400px;
       background: #0a0f1e;
       color: #cbd5e1;
       font-family: 'IBM Plex Sans', sans-serif;
@@ -33,10 +33,10 @@
     .version {
       font-size: 10px;
       font-family: monospace;
-      color: #334155;
+      color: #94a3b8;
     }
 
-    .body { padding: 20px; }
+    .body { padding: 24px; }
 
     .status-row {
       display: flex;
@@ -62,7 +62,7 @@
 
     .scan-btn {
       width: 100%;
-      padding: 11px;
+      padding: 14px;
       background: #1e3a5f;
       border: 1px solid #3b82f6;
       color: #93c5fd;
@@ -98,7 +98,7 @@
       font-weight: 600;
       letter-spacing: 0.1em;
       text-transform: uppercase;
-      color: #475569;
+      color: #94a3b8;
       margin-bottom: 8px;
     }
 
@@ -109,7 +109,7 @@
       margin-bottom: 4px;
     }
 
-    .shortcut-desc { font-size: 11px; color: #64748b; }
+    .shortcut-desc { font-size: 11px; color: #94a3b8; }
 
     kbd {
       font-family: 'IBM Plex Mono', monospace;
@@ -118,7 +118,7 @@
       border: 1px solid #334155;
       border-radius: 3px;
       padding: 1px 5px;
-      color: #94a3b8;
+      color: #cbd5e1;
     }
 
     .settings-link {
@@ -126,7 +126,7 @@
       text-align: center;
       margin-top: 14px;
       font-size: 11px;
-      color: #475569;
+      color: #94a3b8;
       text-decoration: none;
       padding: 6px;
       border-radius: 6px;
@@ -137,15 +137,23 @@
     .supported {
       margin-top: 14px;
       font-size: 10px;
-      color: #334155;
+      color: #64748b;
       text-align: center;
       letter-spacing: 0.03em;
+    }
+
+    .wordmark {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 17px;
+      font-weight: 600;
+      color: #3b82f6;
+      letter-spacing: 0.05em;
     }
   </style>
 </head>
 <body>
   <div class="header">
-    <div class="logo"><img src="../icons/logo.jpeg" alt="WiseMail" style="height:32px;width:auto;object-fit:contain;filter:brightness(0) invert(1);"></div>
+    <div class="logo"><span class="wordmark">WiseMail</span></div>
     <span class="version">v1.0</span>
   </div>
 

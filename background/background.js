@@ -392,9 +392,21 @@ async function analyzeEmail(
   }
 }
 
+const FETCH_TIMEOUT_MS = 45_000;
+
+async function fetchWithTimeout(url, options) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function callGoogle(endpoint, apiKey, systemPrompt, userPrompt) {
   const url = `${endpoint}?key=${apiKey}`;
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -412,7 +424,7 @@ async function callGoogle(endpoint, apiKey, systemPrompt, userPrompt) {
 }
 
 async function callOpenAI(endpoint, apiKey, model, systemPrompt, userPrompt) {
-  const res = await fetch(endpoint, {
+  const res = await fetchWithTimeout(endpoint, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -437,7 +449,7 @@ async function callOpenAI(endpoint, apiKey, model, systemPrompt, userPrompt) {
 }
 
 async function callAnthropic(endpoint, apiKey, model, systemPrompt, userPrompt) {
-  const res = await fetch(endpoint, {
+  const res = await fetchWithTimeout(endpoint, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

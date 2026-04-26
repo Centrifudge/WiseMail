@@ -46,6 +46,19 @@
   // fileName → { text: string, error: string|null, size: number }
   const attachmentContent = new Map();
 
+  async function sendMessage(msg) {
+    try {
+      return await browser.runtime.sendMessage(msg);
+    } catch (err) {
+      const isDeadWorker = err?.message?.includes("Receiving end does not exist") ||
+                           err?.message?.includes("Could not establish connection");
+      if (!isDeadWorker) throw err;
+      // Service worker was killed — wait briefly for Chrome to restart it, then retry once
+      await new Promise(r => setTimeout(r, 300));
+      return await browser.runtime.sendMessage(msg);
+    }
+  }
+
   const COMPOSE_SELECTOR = [
     // Gmail
     '[role="textbox"][aria-label*="Message Body"]',
@@ -593,8 +606,8 @@
     clearInlineHighlights();
     lastAnalyzedText = extractEmailText();
     removeToast();
-    // Re-analyse in the background; keep current panel visible until results arrive
     triggerBackgroundRescan();
+    return true;
   }
 
   // ─── Email client detection ───────────────────────────────────────────────
@@ -738,7 +751,7 @@
 
       clearTimeout(debounceTimer);
       debounceTimer = setTimeout(async () => {
-        const settings = await browser.runtime.sendMessage({ type: "GET_SETTINGS" });
+        const settings = await sendMessage({ type: "GET_SETTINGS" });
         if (settings.autoScan === false) return;
         const text = compose.innerText || compose.textContent || "";
         if (text.trim().length >= 30 && text !== lastAnalyzedText && !isAnalyzing) {
@@ -757,10 +770,10 @@
     lastAnalyzedText = text;
     removeToast();
 
-    const settings = await browser.runtime.sendMessage({ type: "GET_SETTINGS" });
+    const settings = await sendMessage({ type: "GET_SETTINGS" });
     if (!settings.apiKey) { isAnalyzing = false; return; }
 
-    const response = await browser.runtime.sendMessage({
+    const response = await sendMessage({
       type: "ANALYZE_EMAIL",
       emailText: text,
       jurisdiction: settings.jurisdiction || "FR",
@@ -800,25 +813,30 @@
     const attachments = getAttachmentsForAnalysis();
     if (showFullPanel) showPanel({ loading: true, attachments });
 
-    const settings = await browser.runtime.sendMessage({ type: "GET_SETTINGS" });
+    try {
+      const settings = await sendMessage({ type: "GET_SETTINGS" });
 
-    const response = await browser.runtime.sendMessage({
-      type: "ANALYZE_EMAIL",
-      emailText: text,
-      jurisdiction: settings.jurisdiction || "FR",
-      subjectText: extractSubjectText(),
-      recipientEmail: extractRecipientEmail(),
-      senderDomain: getSenderDomain(),
-      attachments,
-    });
+      const response = await sendMessage({
+        type: "ANALYZE_EMAIL",
+        emailText: text,
+        jurisdiction: settings.jurisdiction || "FR",
+        subjectText: extractSubjectText(),
+        recipientEmail: extractRecipientEmail(),
+        senderDomain: getSenderDomain(),
+        attachments,
+      });
 
-    if (response.success && response.result) {
-      highlightIssuesInCompose(response.result);
-    } else {
+      if (response.success && response.result) {
+        highlightIssuesInCompose(response.result);
+      } else {
+        clearInlineHighlights();
+      }
+
+      if (showFullPanel) showPanel({ ...response, emailText: text, attachments });
+    } catch (err) {
       clearInlineHighlights();
+      if (showFullPanel) showPanel({ error: "NETWORK_ERROR", message: err.message || "Extension error — try reloading the page." });
     }
-
-    if (showFullPanel) showPanel({ ...response, emailText: text, attachments });
   }
 
   // ─── Background re-scan (after applying an in-panel fix) ─────────────────
@@ -854,28 +872,34 @@
       return;
     }
 
-    const settings = await browser.runtime.sendMessage({ type: "GET_SETTINGS" });
-    const response = await browser.runtime.sendMessage({
-      type: "ANALYZE_EMAIL",
-      emailText: text,
-      jurisdiction: settings.jurisdiction || "FR",
-      subjectText: extractSubjectText(),
-      recipientEmail: extractRecipientEmail(),
-      senderDomain: getSenderDomain(),
-      attachments,
-    });
+    try {
+      const settings = await sendMessage({ type: "GET_SETTINGS" });
+      const response = await sendMessage({
+        type: "ANALYZE_EMAIL",
+        emailText: text,
+        jurisdiction: settings.jurisdiction || "FR",
+        subjectText: extractSubjectText(),
+        recipientEmail: extractRecipientEmail(),
+        senderDomain: getSenderDomain(),
+        attachments,
+      });
 
-    backgroundRescanRunning = false;
-    lastAnalyzedText = text;
+      backgroundRescanRunning = false;
+      lastAnalyzedText = text;
 
-    if (response.success && response.result) {
-      highlightIssuesInCompose(response.result);
-      showPanel({ ...response, emailText: text, attachments });
-    } else {
+      if (response.success && response.result) {
+        highlightIssuesInCompose(response.result);
+        showPanel({ ...response, emailText: text, attachments });
+      } else {
+        clearInlineHighlights();
+        const currentFooter = activePanel?.querySelector(".cg-footer");
+        if (currentFooter) currentFooter.textContent = "WiseMail · Compliance Analysis";
+      }
+    } catch (err) {
+      backgroundRescanRunning = false;
       clearInlineHighlights();
-      // Restore footer on failure to avoid leaving the spinner up
       const currentFooter = activePanel?.querySelector(".cg-footer");
-      if (currentFooter) currentFooter.textContent = "WiseMail · Compliance Analysis";
+      if (currentFooter) currentFooter.textContent = "WiseMail · Error — try again";
     }
   }
 
@@ -1004,22 +1028,81 @@
       insertDisclaimersIntoCompose(state.result?.requiredDisclaimers || []);
     });
 
-    activePanel.querySelector("#cg-apply-correction")?.addEventListener("click", (e) => {
-      if ((state.result?.correctedEmail && state.result.correctedEmail.length > 10) ||
-          (state.result?.correctedSubject && state.result.correctedSubject.trim().length > 0)) {
-        const btn = e.currentTarget;
-        btn.disabled = true;
-        btn.textContent = "Fixed ✓";
-        applyEmailCorrection(state.result);
-        // Do NOT re-scan automatically — wait for the user to make new edits
-      }
+    function clearDiffPreviews() {
+      document.querySelectorAll("[data-cg-preview]").forEach(el => el.remove());
+    }
+
+    function applyDiff(key, issue) {
+      (highlightedIssueSpans.get(key) || []).forEach(s => {
+        s.classList.add("cg-inline-issue-hover");
+        if (issue?.suggestedFix?.trim()) {
+          s.classList.add("cg-inline-issue-del");
+          const preview = document.createElement("span");
+          preview.className = "cg-inline-fix-preview";
+          preview.textContent = issue.suggestedFix;
+          preview.dataset.cgPreview = "1";
+          s.after(preview);
+        }
+      });
+    }
+
+    function clearDiff(key) {
+      (highlightedIssueSpans.get(key) || []).forEach(s => {
+        s.classList.remove("cg-inline-issue-hover", "cg-inline-issue-del");
+      });
+      clearDiffPreviews();
+    }
+
+    const applyBtn = activePanel.querySelector("#cg-apply-correction");
+    if (applyBtn) {
+      applyBtn.addEventListener("click", () => {
+        if ((state.result?.correctedEmail && state.result.correctedEmail.length > 10) ||
+            (state.result?.correctedSubject && state.result.correctedSubject.trim().length > 0)) {
+          clearDiffPreviews();
+          applyEmailCorrection(state.result);
+          state = {
+            ...state,
+            result: { ...state.result, issues: [], correctedEmail: "", correctedSubject: "" },
+          };
+          showPanel(state);
+        }
+      });
+      applyBtn.addEventListener("mouseenter", () => {
+        highlightedIssueSpans.forEach((spans, key) => {
+          const issue = state.result?.issues?.[Number(key)];
+          applyDiff(key, issue);
+        });
+      });
+      applyBtn.addEventListener("mouseleave", () => {
+        highlightedIssueSpans.forEach((_, key) => clearDiff(key));
+      });
+    }
+
+    activePanel.querySelector("#cg-reject-correction")?.addEventListener("click", () => {
+      state = {
+        ...state,
+        result: { ...state.result, correctedEmail: "", correctedSubject: "" },
+      };
+      showPanel(state);
     });
 
     activePanel.querySelectorAll(".cg-issue-focus-btn").forEach((button) => {
       button.addEventListener("click", async () => {
-        const issue = state.result?.issues?.[Number(button.dataset.issueIndex)];
+        const issueIndex = Number(button.dataset.issueIndex);
+        const issue = state.result?.issues?.[issueIndex];
         if (issue?.suggestedFix?.trim()) {
-          await applySpecificIssueCorrection(state.result, button.dataset.issueIndex, button);
+          clearDiffPreviews();
+          const fixed = await applySpecificIssueCorrection(state.result, button.dataset.issueIndex, button);
+          if (fixed && state.result?.issues) {
+            state = {
+              ...state,
+              result: {
+                ...state.result,
+                issues: state.result.issues.filter((_, i) => i !== issueIndex),
+              },
+            };
+            showPanel(state);
+          }
           return;
         }
         focusIssueInCompose(button.dataset.issueIndex);
@@ -1027,12 +1110,30 @@
 
       button.addEventListener("mouseenter", () => {
         const key = String(button.dataset.issueIndex);
-        (highlightedIssueSpans.get(key) || []).forEach(s => s.classList.add("cg-inline-issue-hover"));
+        const issue = state.result?.issues?.[Number(key)];
+        applyDiff(key, issue);
       });
 
       button.addEventListener("mouseleave", () => {
-        const key = String(button.dataset.issueIndex);
-        (highlightedIssueSpans.get(key) || []).forEach(s => s.classList.remove("cg-inline-issue-hover"));
+        clearDiff(String(button.dataset.issueIndex));
+      });
+    });
+
+    activePanel.querySelectorAll(".cg-reject-btn").forEach((button) => {
+      button.addEventListener("click", () => {
+        const issueIndex = Number(button.dataset.rejectIndex);
+        const key = String(issueIndex);
+        clearDiffPreviews();
+        (highlightedIssueSpans.get(key) || []).forEach(s => { s.className = ""; });
+        highlightedIssueSpans.delete(key);
+        state = {
+          ...state,
+          result: {
+            ...state.result,
+            issues: state.result.issues.filter((_, i) => i !== issueIndex),
+          },
+        };
+        showPanel(state);
       });
     });
 
@@ -1055,7 +1156,7 @@
       return `
         <div class="cg-header">
           <div class="cg-logo">
-            <img src="${browser.runtime.getURL("icons/logo.jpeg")}" alt="WiseMail" class="cg-logo-img">
+            <span class="cg-logo-wordmark">WiseMail</span>
           </div>
           <button id="cg-close" class="cg-close-btn" aria-label="Close">✕</button>
         </div>
@@ -1079,7 +1180,7 @@
       return `
         <div class="cg-header">
           <div class="cg-logo">
-            <img src="${browser.runtime.getURL("icons/logo.jpeg")}" alt="WiseMail" class="cg-logo-img">
+            <span class="cg-logo-wordmark">WiseMail</span>
           </div>
           <button id="cg-close" class="cg-close-btn">✕</button>
         </div>
@@ -1119,6 +1220,45 @@
       DATA_PRIVACY:                 "Personal data",
     };
 
+    function shortSkillName(name) {
+      return name
+        .replace(/\s*—\s*.+$/, "")
+        .replace(/\b(law|promotions|communications|baseline|template)\b/gi, "")
+        .replace(/\s{2,}/g, " ")
+        .trim()
+        .replace(/\s*\/\s*/g, "/");
+    }
+
+    function skillHasFail(skill, issues) {
+      const realIssues = issues.filter(i => i.severity !== "zero-risk");
+      if (!realIssues.length) return false;
+      const stopWords = new Set(["the","and","for","law","of","in","a","an","to","with","or","by","per","eu","if"]);
+      const tokens = skill.name
+        .split(/[\s/\-·,|()]+/)
+        .map(t => t.replace(/[^\w]/g, "").toLowerCase())
+        .filter(t => t.length > 2 && !stopWords.has(t));
+      return realIssues.some(issue => {
+        const reg = (issue.regulation || "").toLowerCase();
+        return tokens.some(token => reg.includes(token));
+      });
+    }
+
+    const pillsHTML = (r.appliedSkills || []).map(skill => {
+      const fail = skillHasFail(skill, indexedIssues);
+      return `<span class="cg-law-pill ${fail ? "cg-law-pill-fail" : "cg-law-pill-pass"}">${fail ? "✗" : "✓"} ${shortSkillName(skill.name)}</span>`;
+    }).join("");
+
+    const lawCarouselHTML = (r.appliedSkills || []).length ? `
+      <div class="cg-law-carousel">
+        <div class="cg-law-track">
+          ${pillsHTML}
+          <span style="width:20px;flex-shrink:0" aria-hidden="true"></span>
+          ${pillsHTML}
+          <span style="width:20px;flex-shrink:0" aria-hidden="true"></span>
+        </div>
+      </div>
+    ` : "";
+
     function renderIssues(issues, cls) {
       return issues.map(issue => `
         <div class="cg-issue cg-issue-${cls}">
@@ -1128,9 +1268,10 @@
           </div>
           <p class="cg-issue-desc">${issue.description}</p>
           ${issue.quote ? `<blockquote class="cg-issue-quote">${issue.quote}</blockquote>` : ""}
-          ${issue.quote
-            ? `<div class="cg-issue-actions"><button class="cg-issue-focus-btn" data-issue-index="${issue.__index}">${issue.suggestedFix?.trim() ? "Fix this" : "View in email"}</button></div>`
-            : ""}
+          <div class="cg-issue-actions">
+            <button class="cg-reject-btn" data-reject-index="${issue.__index}">Reject</button>
+            ${issue.quote && issue.suggestedFix?.trim() ? `<button class="cg-issue-focus-btn" data-issue-index="${issue.__index}">Fix this</button>` : ""}
+          </div>
         </div>
       `).join("");
     }
@@ -1153,9 +1294,6 @@
       (r.correctedSubject && r.correctedSubject.trim().length > 0)
     );
 
-    const appliedSkillsHTML = (r.appliedSkills || [])
-      .map(skill => `<span class="cg-skill-chip">${skill.name}</span>`).join("");
-
     // Attachment scan status section
     const attachmentRowsHTML = attachments.map(att => `
       <div class="cg-attachment-row ${att.error ? "cg-attachment-error" : "cg-attachment-ok"}">
@@ -1168,10 +1306,12 @@
     return `
       <div class="cg-header">
         <div class="cg-logo">
-          <img src="${browser.runtime.getURL("icons/logo.jpeg")}" alt="WiseMail" class="cg-logo-img" style="filter:brightness(0) invert(1);">
+          <span class="cg-logo-wordmark">WiseMail</span>
         </div>
         <button id="cg-close" class="cg-close-btn" aria-label="Close">✕</button>
       </div>
+
+      ${lawCarouselHTML}
 
       ${hasCorrection ? `
         <div class="cg-correction-banner cg-correction-${correctionSeverity}">
@@ -1180,6 +1320,7 @@
             <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/>
           </svg>
           A complete correction is available
+          <button id="cg-reject-correction" class="cg-correction-reject-btn">Reject</button>
           <button id="cg-apply-correction" class="cg-correction-btn">Fix All</button>
         </div>
       ` : ""}
@@ -1216,16 +1357,6 @@
             <span class="cg-badge ${attachments.some(a => a.error) ? "cg-badge-warn" : ""}">${attachments.length}</span>
           </summary>
           <div class="cg-attachments-body">${attachmentRowsHTML}</div>
-        </details>
-      ` : ""}
-
-      ${r.appliedSkills?.length ? `
-        <details class="cg-skills-strip">
-          <summary class="cg-skills-summary">
-            <span class="cg-skills-summary-label">Concerned Laws</span>
-            <span class="cg-badge">${r.appliedSkills.length}</span>
-          </summary>
-          <div class="cg-skill-chip-row">${appliedSkillsHTML}</div>
         </details>
       ` : ""}
 
