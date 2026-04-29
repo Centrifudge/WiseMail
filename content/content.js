@@ -127,6 +127,61 @@
     return Math.min(Math.max(value, min), max);
   }
 
+  // Save the current caret/selection as character offsets relative to a container.
+  // Returns null when the selection is outside the container or absent.
+  function getSelectionOffsets(container) {
+    if (!container) return null;
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return null;
+    const range = sel.getRangeAt(0);
+    if (!container.contains(range.startContainer)) return null;
+    const measure = (node, off) => {
+      const r = document.createRange();
+      r.selectNodeContents(container);
+      r.setEnd(node, off);
+      return r.toString().length;
+    };
+    return {
+      start: measure(range.startContainer, range.startOffset),
+      end:   measure(range.endContainer,   range.endOffset),
+    };
+  }
+
+  // Restore a previously saved caret/selection inside container.
+  // No-op when saved is null or the container no longer has the right text nodes.
+  function restoreSelectionOffsets(container, saved) {
+    if (!saved || !container) return;
+    const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+    let startNode = null, startOff = 0, endNode = null, endOff = 0;
+    let charCount = 0;
+    let node;
+    while ((node = walker.nextNode())) {
+      const len = node.nodeValue.length;
+      if (!startNode && charCount + len >= saved.start) {
+        startNode = node;
+        startOff  = saved.start - charCount;
+      }
+      if (!endNode && charCount + len >= saved.end) {
+        endNode = node;
+        endOff  = saved.end - charCount;
+      }
+      if (startNode && endNode) break;
+      charCount += len;
+    }
+    if (!startNode) return;
+    if (!endNode) { endNode = startNode; endOff = startOff; }
+    try {
+      const range = document.createRange();
+      range.setStart(startNode, Math.min(startOff, startNode.nodeValue.length));
+      range.setEnd(endNode,   Math.min(endOff,   endNode.nodeValue.length));
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+    } catch (_) {
+      // Node may have been detached — ignore
+    }
+  }
+
   function clampPanelPosition(panel, position) {
     const margin = 16;
     const maxLeft = Math.max(margin, window.innerWidth - panel.offsetWidth - margin);
@@ -215,104 +270,8 @@
     });
   }
 
-  // ─── PDF text extraction ──────────────────────────────────────────────────
-
-  /**
-   * Extracts plain text from a PDF ArrayBuffer using the BT/ET operator approach.
-   * Works for PDFs with standard Type 1 / TrueType text encoding.
-   * Returns an empty string for scanned images or encrypted documents.
-   */
-  function extractTextFromPDFBuffer(buffer) {
-    let raw;
-    try {
-      // new Uint8Array(buffer) clones into content-script compartment to avoid Firefox Xray errors
-      raw = new TextDecoder("latin1").decode(new Uint8Array(new Uint8Array(buffer)));
-    } catch {
-      return "";
-    }
-
-    const parts = [];
-    const btEtRegex = /BT\s([\s\S]*?)ET/g;
-    let block;
-    while ((block = btEtRegex.exec(raw)) !== null) {
-      // Match (string)Tj  or  [(string)]TJ  operators
-      const tjRegex = /\(([^)\\]*(?:\\.[^)\\]*)*)\)\s*Tj|\[([^\]]*)\]\s*TJ/g;
-      let match;
-      while ((match = tjRegex.exec(block[1])) !== null) {
-        const raw2 = match[1] || match[2] || "";
-        const decoded = raw2
-          .replace(/\\n/g, " ").replace(/\\r/g, " ").replace(/\\t/g, " ")
-          .replace(/\\\(/g, "(").replace(/\\\)/g, ")").replace(/\\\\/g, "\\")
-          .replace(/\\(\d{3})/g, (_, oct) => String.fromCharCode(parseInt(oct, 8)));
-        if (decoded.trim()) parts.push(decoded.trim());
-      }
-    }
-
-    return parts.join(" ").replace(/\s+/g, " ").trim();
-  }
-
   // ─── Attachment interception ──────────────────────────────────────────────
-
-  async function extractTextFromDocx(buffer) {
-    // Clone buffer into content-script compartment to avoid Firefox Xray wrapper errors
-    const raw = new Uint8Array(new Uint8Array(buffer));
-    const target = "word/document.xml";
-    let pos = 0;
-
-    while (pos < raw.length - 30) {
-      // ZIP local file header: PK\x03\x04
-      if (raw[pos] !== 0x50 || raw[pos+1] !== 0x4b || raw[pos+2] !== 0x03 || raw[pos+3] !== 0x04) {
-        pos++; continue;
-      }
-      const compMethod = raw[pos+8]  | (raw[pos+9]  << 8);
-      const compSize   = raw[pos+18] | (raw[pos+19] << 8) | (raw[pos+20] << 16) | (raw[pos+21] << 24);
-      const nameLen    = raw[pos+26] | (raw[pos+27] << 8);
-      const extraLen   = raw[pos+28] | (raw[pos+29] << 8);
-      const nameStart  = pos + 30;
-      const fileName   = new TextDecoder().decode(raw.slice(nameStart, nameStart + nameLen));
-      const dataStart  = nameStart + nameLen + extraLen;
-
-      if (fileName === target) {
-        const compData = raw.slice(dataStart, dataStart + compSize);
-        let xml = "";
-
-        if (compMethod === 0) {
-          // Stored (uncompressed)
-          xml = new TextDecoder().decode(compData);
-        } else if (compMethod === 8) {
-          // DEFLATE — decompress with native DecompressionStream
-          try {
-            const ds = new DecompressionStream("deflate-raw");
-            const writer = ds.writable.getWriter();
-            writer.write(compData);
-            writer.close();
-            const chunks = [];
-            const reader = ds.readable.getReader();
-            while (true) {
-              const { done, value } = await reader.read();
-              if (done) break;
-              chunks.push(value);
-            }
-            const total = chunks.reduce((n, c) => n + c.length, 0);
-            const out = new Uint8Array(total);
-            let off = 0;
-            for (const c of chunks) { out.set(c, off); off += c.length; }
-            xml = new TextDecoder().decode(out);
-          } catch {
-            return "";
-          }
-        }
-
-        // Strip XML tags and normalise whitespace
-        return xml.replace(/<\/w:p>/gi, "\n")
-                  .replace(/<[^>]+>/g, " ")
-                  .replace(/\s+/g, " ")
-                  .trim();
-      }
-      pos = dataStart + Math.max(compSize, 1);
-    }
-    return "";
-  }
+  // Text extractors (cgExtractPDFText, cgExtractDocxText) are in attachment-parser.js
 
   async function processAttachment(file) {
     const name = file.name;
@@ -324,7 +283,7 @@
       const buffer = rawBuffer.slice(0);
 
       if (ext === "pdf" || file.type === "application/pdf") {
-        const text = extractTextFromPDFBuffer(buffer);
+        const text = cgExtractPDFText(buffer);
         if (text.length > 20) {
           attachmentContent.set(name, { text, error: null, size: file.size });
         } else {
@@ -340,7 +299,7 @@
         attachmentContent.set(name, { text: text.slice(0, 10000), error: null, size: file.size });
 
       } else if (ext === "docx" || file.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
-        const text = await extractTextFromDocx(buffer);
+        const text = await cgExtractDocxText(buffer);
         if (text.length > 20) {
           attachmentContent.set(name, { text: text.slice(0, 20000), error: null, size: file.size });
         } else {
@@ -581,6 +540,22 @@
     return false;
   }
 
+  function appendDisclosureToCompose(text) {
+    const compose = getComposeElement();
+    if (!compose) return false;
+    compose.focus();
+    const sel = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(compose);
+    range.collapse(false);
+    sel.removeAllRanges();
+    sel.addRange(range);
+    document.execCommand("insertText", false, "\n\n" + text);
+    sel.removeAllRanges();
+    compose.dispatchEvent(new Event("input", { bubbles: true }));
+    return true;
+  }
+
   async function applySpecificIssueCorrection(result, issueIndex, button) {
     const issue = result?.issues?.[Number(issueIndex)];
     if (!issue) return;
@@ -592,10 +567,11 @@
     button.disabled = true;
     button.textContent = "Applying...";
 
-    const applied =
-      replaceIssueInSubject(issue, replacementText) ||
-      (focusIssueInCompose(issueIndex), replaceHighlightedIssue(issueIndex, replacementText)) ||
-      replaceIssueFallbackInCompose(issue, replacementText);
+    const applied = !issue.quote
+      ? appendDisclosureToCompose(replacementText)
+      : replaceIssueInSubject(issue, replacementText) ||
+        (focusIssueInCompose(issueIndex), replaceHighlightedIssue(issueIndex, replacementText)) ||
+        replaceIssueFallbackInCompose(issue, replacementText);
 
     if (!applied) {
       button.textContent = "Not found";
@@ -766,7 +742,13 @@
   async function triggerAutoScan(text) {
     if (isAnalyzing) return;
     isAnalyzing = true;
+
+    const compose = getComposeElement();
+    const savedSel = getSelectionOffsets(compose);
+
     clearInlineHighlights();
+    restoreSelectionOffsets(compose, savedSel);
+
     lastAnalyzedText = text;
     removeToast();
 
@@ -786,7 +768,9 @@
     isAnalyzing = false;
 
     if (response.success && response.result) {
+      const savedSel2 = getSelectionOffsets(compose);
       highlightIssuesInCompose(response.result);
+      restoreSelectionOffsets(compose, savedSel2);
       const attachments = getAttachmentsForAnalysis();
       if (settings.showPanel !== false) {
         showPanel({ success: true, result: response.result, emailText: text, autoOpened: true, attachments });
@@ -888,7 +872,9 @@
       lastAnalyzedText = text;
 
       if (response.success && response.result) {
+        const savedSel = getSelectionOffsets(getComposeElement());
         highlightIssuesInCompose(response.result);
+        restoreSelectionOffsets(getComposeElement(), savedSel);
         showPanel({ ...response, emailText: text, attachments });
       } else {
         clearInlineHighlights();
@@ -1270,7 +1256,7 @@
           ${issue.quote ? `<blockquote class="cg-issue-quote">${issue.quote}</blockquote>` : ""}
           <div class="cg-issue-actions">
             <button class="cg-reject-btn" data-reject-index="${issue.__index}">Reject</button>
-            ${issue.quote && issue.suggestedFix?.trim() ? `<button class="cg-issue-focus-btn" data-issue-index="${issue.__index}">Fix this</button>` : ""}
+            ${issue.suggestedFix?.trim() ? `<button class="cg-issue-focus-btn" data-issue-index="${issue.__index}">${issue.quote ? "Fix this" : "Add disclosure"}</button>` : ""}
           </div>
         </div>
       `).join("");

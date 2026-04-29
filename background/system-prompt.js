@@ -61,7 +61,7 @@ Output rules:
 - correctedEmail must contain only the body, never a Subject/Objet line
 - if the subject should change, put it only in correctedSubject
 - suggestedFix must be a local replacement for quote only, not a full-email rewrite
-- if an issue is a missing disclosure and there is no local quote to replace, leave quote and suggestedFix empty
+- if an issue is a missing disclosure and there is no local quote to replace, leave quote empty but put the full required disclosure text in suggestedFix so the UI can offer to append it
 - do not invent citations or laws that are not grounded in the provided skills/context
 - zero-risk issues (SPELLING_GRAMMAR) must never affect riskScore
 - when an attached document could not be read (ERROR prefix in the attachment block), add one issue with type ATTACHMENT_READ_ERROR, severity "warning", leave quote and suggestedFix empty, and describe which file failed in the description field

@@ -37,18 +37,25 @@
         "*://outlook.cloud.microsoft/*",
         "*://*.outlook.com/*"
       ],
-      "js": ["content/content.js"],
+      "js": ["content/attachment-parser.js", "content/content.js"],
       "css": ["content/content.css"],
       "run_at": "document_idle"
     }
   ],
   "background": {
-    "scripts": ["background/system-prompt.js", "background/skills-library.js", "background/background.js"],
+    "scripts": [
+      "background/system-prompt.js",
+      "background/skills-library.js",
+      "background/api.js",
+      "background/background.js"
+    ],
     "persistent": false
   },
+  "content_security_policy": "script-src 'self'; object-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self';",
   "options_ui": {
     "page": "options/options.html",
-    "browser_style": false
+    "browser_style": false,
+    "open_in_tab": true
   },
   "web_accessible_resources": ["icons/logo.jpeg", "icons/icon48.png", "icons/icon96.png"]
 }
