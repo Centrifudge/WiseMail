@@ -33,6 +33,8 @@
   // ─── Global state ─────────────────────────────────────────────────────────
 
   let activePanel = null;
+  let activeMini = null;
+  let lastPanelState = null;
   let activeToast = null;
   let debounceTimer = null;
   let lastAnalyzedText = "";
@@ -991,6 +993,8 @@
   // ─── Panel ────────────────────────────────────────────────────────────────
 
   function showPanel(state) {
+    if (!state.loading) lastPanelState = state;
+    updateMiniDot(getMiniDotStatus(state));
     removePanel();
     activePanel = document.createElement("div");
     activePanel.id = "cg-panel";
@@ -999,7 +1003,7 @@
     positionPanel(activePanel);
     enablePanelDragging(activePanel);
 
-    activePanel.querySelector("#cg-close")?.addEventListener("click", removePanel);
+    activePanel.querySelector("#cg-close")?.addEventListener("click", removePanelAnimated);
 
     activePanel.querySelectorAll(".cg-copy-btn").forEach(btn => {
       btn.addEventListener("click", () => {
@@ -1132,18 +1136,69 @@
     if (activePanel) { activePanel.remove(); activePanel = null; }
   }
 
+  function removePanelAnimated() {
+    if (!activePanel) return;
+    const panel = activePanel;
+    activePanel = null;
+    panel.classList.add("cg-panel-closing");
+    panel.addEventListener("animationend", () => panel.remove(), { once: true });
+  }
+
+  // ─── Mini-panel ────────────────────────────────────────────────────────────
+
+  function getMiniDotStatus(state) {
+    if (state.loading) return "scanning";
+    if (state.error) return "warn";
+    if (!state.result) return "idle";
+    const issues = state.result.issues || [];
+    if (issues.some(i => i.severity === "critical")) return "critical";
+    if (issues.some(i => i.severity === "warning")) return "warn";
+    return "ok";
+  }
+
+  function updateMiniDot(status) {
+    const dot = activeMini?.querySelector(".cg-mini-dot");
+    if (dot) dot.className = `cg-mini-dot cg-mini-dot-${status}`;
+  }
+
+  function showMini() {
+    if (activeMini) return;
+    const iconUrl = browser.runtime.getURL("icons/icon48.png");
+    activeMini = document.createElement("div");
+    activeMini.id = "cg-mini";
+    activeMini.innerHTML = `
+      <img class="cg-mini-icon" src="${iconUrl}" alt="">
+      <span class="cg-mini-label">WiseMail</span>
+      <span class="cg-mini-dot cg-mini-dot-idle"></span>
+    `;
+    activeMini.addEventListener("click", () => {
+      if (activePanel) {
+        removePanelAnimated();
+      } else if (lastPanelState) {
+        showPanel(lastPanelState);
+      } else {
+        triggerScan(true);
+      }
+    });
+    document.body.appendChild(activeMini);
+  }
+
+  function removeMini() {
+    if (activeMini) { activeMini.remove(); activeMini = null; }
+  }
+
   // ─── Panel HTML builder ───────────────────────────────────────────────────
 
   function buildPanelHTML(state) {
     const attachments = state.attachments || [];
+    const iconUrl = browser.runtime.getURL("icons/icon48.png");
+    const logoHTML = `<img class="cg-logo-icon" src="${iconUrl}" alt=""><span class="cg-logo-wordmark">WiseMail</span>`;
 
     // ── Loading ─────────────────────────────────────────────────────────────
     if (state.loading) {
       return `
         <div class="cg-header">
-          <div class="cg-logo">
-            <span class="cg-logo-wordmark">WiseMail</span>
-          </div>
+          <div class="cg-logo">${logoHTML}</div>
           <button id="cg-close" class="cg-close-btn" aria-label="Close">✕</button>
         </div>
         <div class="cg-loading">
@@ -1165,9 +1220,7 @@
       };
       return `
         <div class="cg-header">
-          <div class="cg-logo">
-            <span class="cg-logo-wordmark">WiseMail</span>
-          </div>
+          <div class="cg-logo">${logoHTML}</div>
           <button id="cg-close" class="cg-close-btn">✕</button>
         </div>
         <div class="cg-error">
@@ -1291,9 +1344,7 @@
 
     return `
       <div class="cg-header">
-        <div class="cg-logo">
-          <span class="cg-logo-wordmark">WiseMail</span>
-        </div>
+        <div class="cg-logo">${logoHTML}</div>
         <button id="cg-close" class="cg-close-btn" aria-label="Close">✕</button>
       </div>
 
@@ -1388,16 +1439,21 @@
         document.getElementById("cg-scan-btn").remove();
       }
 
+      // Show mini panel as soon as compose is open
+      if (compose) showMini();
+
       // Detect compose window close: dismiss panel and reset state
       if (compose) {
         clearTimeout(composeCloseTimer);
-      } else if (activePanel || activeToast) {
+      } else if (activePanel || activeToast || activeMini) {
         clearTimeout(composeCloseTimer);
         composeCloseTimer = setTimeout(() => {
           if (!getComposeElement()) {
             removePanel();
+            removeMini();
             removeToast();
             lastAnalyzedText = "";
+            lastPanelState = null;
             attachmentContent.clear();
           }
         }, 500);

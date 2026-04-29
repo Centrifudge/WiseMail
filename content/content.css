@@ -1,5 +1,15 @@
 /* ComplianceGuard — styles injected into Gmail */
 
+@keyframes cg-rgb-spin {
+  from { --cg-rgb-angle: 0deg; }
+  to   { --cg-rgb-angle: 360deg; }
+}
+@property --cg-rgb-angle {
+  syntax: '<angle>';
+  inherits: false;
+  initial-value: 0deg;
+}
+
 /* ─── Bouton dans la barre d'outils ──────────────────────────────────────── */
 #cg-scan-btn {
   display: inline-flex;
@@ -44,7 +54,7 @@
   width: 456px;
   max-height: 88vh;
   background: #ffffff;
-  border: 1px solid #e2e8f0;
+  border: none;
   border-radius: 14px;
   box-shadow: 0 4px 6px -1px rgba(0,0,0,0.07), 0 10px 40px -4px rgba(0,0,0,0.12);
   color: #1e293b;
@@ -54,6 +64,120 @@
   overflow: hidden;
   display: flex;
   flex-direction: column;
+}
+#cg-panel::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 14px;
+  padding: 2px;
+  background: conic-gradient(
+    from var(--cg-rgb-angle),
+    #6366f1 0%,
+    #8b5cf6 15%,
+    #ec4899 30%,
+    #f97316 45%,
+    #eab308 55%,
+    #22c55e 70%,
+    #06b6d4 82%,
+    #3b82f6 90%,
+    #6366f1 100%
+  );
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  animation: cg-rgb-spin 4s linear infinite;
+  opacity: 0.55;
+  pointer-events: none;
+  z-index: 10;
+}
+
+/* ─── Panel open/close animations ───────────────────────────────────────── */
+@keyframes cg-panel-open {
+  from { opacity: 0; transform: scale(0.15) translateY(16px); }
+  to   { opacity: 1; transform: scale(1)    translateY(0); }
+}
+@keyframes cg-panel-close {
+  from { opacity: 1; transform: scale(1)    translateY(0); }
+  to   { opacity: 0; transform: scale(0.15) translateY(16px); }
+}
+#cg-panel {
+  animation: cg-panel-open 0.22s cubic-bezier(0.34, 1.2, 0.64, 1);
+  transform-origin: bottom left;
+}
+.cg-panel-closing {
+  animation: cg-panel-close 0.15s ease-in forwards !important;
+}
+
+/* ─── Mini panel ─────────────────────────────────────────────────────────── */
+#cg-mini {
+  position: fixed;
+  bottom: 80px;
+  left: 280px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 13px;
+  background: #0f172a;
+  border: none;
+  border-radius: 999px;
+  cursor: pointer;
+  z-index: 999998;
+  user-select: none;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.25);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+#cg-mini::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  padding: 2px;
+  background: conic-gradient(
+    from var(--cg-rgb-angle),
+    #6366f1 0%,
+    #8b5cf6 15%,
+    #ec4899 30%,
+    #f97316 45%,
+    #eab308 55%,
+    #22c55e 70%,
+    #06b6d4 82%,
+    #3b82f6 90%,
+    #6366f1 100%
+  );
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  animation: cg-rgb-spin 4s linear infinite;
+  opacity: 0.55;
+  pointer-events: none;
+}
+.cg-mini-icon {
+  width: 18px;
+  height: 18px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+.cg-mini-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #e2e8f0;
+  letter-spacing: 0.03em;
+}
+.cg-mini-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.cg-mini-dot-idle     { background: #475569; }
+.cg-mini-dot-scanning { background: #3b82f6; animation: cg-mini-pulse 1s ease infinite; }
+.cg-mini-dot-ok       { background: #22c55e; }
+.cg-mini-dot-warn     { background: #f59e0b; }
+.cg-mini-dot-critical { background: #ef4444; }
+@keyframes cg-mini-pulse {
+  0%, 100% { opacity: 1;   transform: scale(1); }
+  50%       { opacity: 0.4; transform: scale(0.75); }
 }
 
 /* ─── En-tête ────────────────────────────────────────────────────────────── */
@@ -71,6 +195,13 @@
 .cg-logo {
   display: flex;
   align-items: center;
+  gap: 8px;
+}
+.cg-logo-icon {
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  flex-shrink: 0;
 }
 .cg-logo-wordmark {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -755,7 +886,6 @@
 
   #cg-panel {
     background: #0f172a;
-    border-color: #1e293b;
     color: #e2e8f0;
     box-shadow: 0 4px 6px -1px rgba(0,0,0,0.4), 0 10px 40px -4px rgba(0,0,0,0.5);
   }
