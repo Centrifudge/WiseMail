@@ -15,199 +15,278 @@
       </p>
     </div>
 
-    <div class="section">
-      <div class="section-title">API Configuration</div>
+    <nav class="page-tabs" id="page-tabs" role="tablist">
+      <button class="page-tab active" data-tab="settings" type="button" role="tab" aria-selected="true">Settings</button>
+      <button class="page-tab" data-tab="subscription" type="button" role="tab" aria-selected="false">Subscription</button>
+    </nav>
 
-      <div class="field">
-        <label for="apiKey">API Key</label>
-        <input type="password" id="apiKey" placeholder="AIza…  or  sk-…" autocomplete="off" spellcheck="false">
-        <p class="hint">
-          Google: <a href="https://makersuite.google.com/app/apikey" target="_blank">AI Studio</a>
-          · OpenAI: <a href="https://platform.openai.com/api-keys" target="_blank">platform.openai.com</a>
-          · Anthropic: <a href="https://console.anthropic.com/" target="_blank">console.anthropic.com</a>
-        </p>
-      </div>
+    <!-- ── Settings panel ── -->
+    <div class="tab-panel" id="panel-settings">
 
-      <div class="field">
-        <label>Provider</label>
-        <div class="provider-tabs" id="provider-tabs">
-          <button class="provider-tab" data-provider="google" type="button">Google</button>
-          <button class="provider-tab" data-provider="openai" type="button">OpenAI</button>
-          <button class="provider-tab" data-provider="anthropic" type="button">Anthropic</button>
-          <button class="provider-tab" data-provider="custom" type="button">Custom</button>
-        </div>
-      </div>
+      <div class="section">
+        <div class="section-title">API Configuration</div>
 
-      <div class="field">
-        <label for="endpoint">Endpoint URL</label>
-        <div class="input-with-btn">
-          <input type="text" id="endpoint" spellcheck="false" placeholder="https://…">
-          <button class="ghost-btn" id="reset-endpoint" type="button">↺ Default</button>
-        </div>
-        <p class="hint">Use <code>{model}</code> as a placeholder for Google-style endpoints.</p>
-      </div>
-
-      <div class="field-row">
         <div class="field">
-          <label for="modelPreset">Model</label>
-          <select id="modelPreset">
-            <optgroup label="── Gemini 3.x ──">
-              <option value="gemini-3.1-flash-lite-preview">Gemini 3.1 Flash-Lite Preview</option>
-              <option value="gemini-3.1-pro-preview">Gemini 3.1 Pro Preview</option>
-              <option value="gemini-3-flash-preview">Gemini 3 Flash Preview</option>
-            </optgroup>
-            <optgroup label="── Gemini 2.5 ──">
-              <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
-              <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
-              <option value="gemini-2.5-flash-lite">Gemini 2.5 Flash-Lite</option>
-            </optgroup>
-            <optgroup label="── Gemini 2.0 (legacy) ──">
-              <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
-              <option value="gemini-2.0-flash-lite">Gemini 2.0 Flash Lite</option>
-            </optgroup>
-            <optgroup label="── OpenAI ──">
-              <option value="gpt-4o">GPT-4o</option>
-              <option value="gpt-4o-mini">GPT-4o Mini</option>
-              <option value="o3">o3</option>
-            </optgroup>
-            <optgroup label="── Anthropic ──">
-              <option value="claude-sonnet-4-6">Claude Sonnet 4.6</option>
-              <option value="claude-opus-4-6">Claude Opus 4.6</option>
-            </optgroup>
-            <option value="custom">Custom…</option>
-          </select>
+          <label for="apiKey">API Key</label>
+          <input type="password" id="apiKey" placeholder="AIza…  or  sk-…" autocomplete="off" spellcheck="false">
+          <p class="hint">
+            Google: <a href="https://makersuite.google.com/app/apikey" target="_blank">AI Studio</a>
+            · OpenAI: <a href="https://platform.openai.com/api-keys" target="_blank">platform.openai.com</a>
+            · Anthropic: <a href="https://console.anthropic.com/" target="_blank">console.anthropic.com</a>
+          </p>
         </div>
-        <div class="field hidden" id="custom-model-wrap">
-          <label for="customModel">Custom Model Name</label>
-          <input type="text" id="customModel" placeholder="my-fine-tuned-model" spellcheck="false">
-        </div>
-      </div>
-    </div>
 
-    <div class="section">
-      <div class="section-title">Jurisdiction Routing</div>
-      <div class="field-row">
         <div class="field">
-          <label for="jurisdiction">Sender / Primary Jurisdiction</label>
-          <select id="jurisdiction"></select>
-          <p class="hint">This is the sender-side legal base. If you pick France, the extension also loads EU-level rules automatically.</p>
+          <label>Provider</label>
+          <div class="provider-tabs" id="provider-tabs">
+            <button class="provider-tab" data-provider="google" type="button">Google</button>
+            <button class="provider-tab" data-provider="openai" type="button">OpenAI</button>
+            <button class="provider-tab" data-provider="anthropic" type="button">Anthropic</button>
+            <button class="provider-tab" data-provider="custom" type="button">Custom</button>
+          </div>
         </div>
+
         <div class="field">
-          <label for="counterpartyJurisdiction">Counterparty Jurisdiction</label>
-          <select id="counterpartyJurisdiction"></select>
-          <p class="hint">Use this when the recipient country cannot be inferred from the email domain. Example: FR sender + US recipient ⇒ FR + EU + US skills.</p>
+          <label for="endpoint">Endpoint URL</label>
+          <div class="input-with-btn">
+            <input type="text" id="endpoint" spellcheck="false" placeholder="https://…">
+            <button class="ghost-btn" id="reset-endpoint" type="button">↺ Default</button>
+          </div>
+          <p class="hint">Use <code>{model}</code> as a placeholder for Google-style endpoints.</p>
+        </div>
+
+        <div class="field-row">
+          <div class="field">
+            <label for="modelPreset">Model</label>
+            <select id="modelPreset">
+              <optgroup label="── Gemini 3.1 ──">
+                <option value="gemini-3.1-flash-lite">Gemini 3.1 Flash-Lite</option>
+                <option value="gemini-3.1-pro">Gemini 3.1 Pro</option>
+                <option value="gemini-3.1-flash-lite-preview">Gemini 3.1 Flash-Lite Preview</option>
+                <option value="gemini-3.1-pro-preview">Gemini 3.1 Pro Preview</option>
+                <option value="gemini-3-flash-preview">Gemini 3 Flash Preview</option>
+              </optgroup>
+              <optgroup label="── Gemini 2.5 ──">
+                <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
+                <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
+                <option value="gemini-2.5-flash-lite">Gemini 2.5 Flash-Lite</option>
+              </optgroup>
+              <optgroup label="── Gemini 2.0 (legacy) ──">
+                <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
+                <option value="gemini-2.0-flash-lite">Gemini 2.0 Flash Lite</option>
+              </optgroup>
+              <optgroup label="── OpenAI ──">
+                <option value="gpt-4o">GPT-4o</option>
+                <option value="gpt-4o-mini">GPT-4o Mini</option>
+                <option value="o3">o3</option>
+              </optgroup>
+              <optgroup label="── Anthropic ──">
+                <option value="claude-sonnet-4-6">Claude Sonnet 4.6</option>
+                <option value="claude-opus-4-6">Claude Opus 4.6</option>
+              </optgroup>
+              <option value="custom">Custom…</option>
+            </select>
+          </div>
+          <div class="field hidden" id="custom-model-wrap">
+            <label for="customModel">Custom Model Name</label>
+            <input type="text" id="customModel" placeholder="my-fine-tuned-model" spellcheck="false">
+          </div>
         </div>
       </div>
-    </div>
 
-    <div class="section">
-      <div class="section-title">System Prompt</div>
-      <div class="field">
-        <label for="systemPrompt">Base System Prompt</label>
-        <textarea id="systemPrompt" spellcheck="false"></textarea>
-        <p class="hint">
-          This is the editable base prompt. WiseMail still appends a fixed JSON/output contract so the UI keeps working.
-          Keep instructions compatible with issue-level fixes and multi-skill reasoning.
-        </p>
+      <div class="section">
+        <div class="section-title">Jurisdiction Routing</div>
+        <div class="field-row">
+          <div class="field">
+            <label for="jurisdiction">Sender / Primary Jurisdiction</label>
+            <select id="jurisdiction"></select>
+            <p class="hint">This is the sender-side legal base. If you pick France, the extension also loads EU-level rules automatically.</p>
+          </div>
+          <div class="field">
+            <label for="counterpartyJurisdiction">Counterparty Jurisdiction</label>
+            <select id="counterpartyJurisdiction"></select>
+            <p class="hint">Use this when the recipient country cannot be inferred from the email domain. Example: FR sender + US recipient ⇒ FR + EU + US skills.</p>
+          </div>
+        </div>
       </div>
-      <div class="section-actions">
-        <button class="ghost-btn" id="reset-system-prompt" type="button">Restore Default Prompt</button>
-      </div>
-    </div>
 
-    <div class="section">
-      <div class="section-title">Compliance Skills</div>
-      <div class="stack">
-        <p class="hint">
-          Built-in law skills cover FR, EU, US, UK, AU and cross-border logic. Create policy skills for internal company rules, approval flows,
-          forbidden claims, mandatory signatures or product restrictions. Enabled policy skills marked as “always include” are added to every scan.
-        </p>
-
+      <div class="section">
+        <div class="section-title">System Prompt</div>
+        <div class="field">
+          <label for="systemPrompt">Base System Prompt</label>
+          <textarea id="systemPrompt" spellcheck="false"></textarea>
+          <p class="hint">
+            This is the editable base prompt. WiseMail still appends a fixed JSON/output contract so the UI keeps working.
+            Keep instructions compatible with issue-level fixes and multi-skill reasoning.
+          </p>
+        </div>
         <div class="section-actions">
-          <button class="ghost-btn" id="restore-skills-btn" type="button">Restore Built-in Skills</button>
+          <button class="ghost-btn" id="reset-system-prompt" type="button">Restore Default Prompt</button>
         </div>
+      </div>
 
-        <div class="skills-list" id="skills-list"></div>
+      <div class="section">
+        <div class="section-title">Compliance Skills</div>
+        <div class="stack">
+          <p class="hint">
+            Built-in law skills cover FR, EU, US, UK, AU and cross-border logic. Create policy skills for internal company rules, approval flows,
+            forbidden claims, mandatory signatures or product restrictions. Enabled policy skills marked as "always include" are added to every scan.
+          </p>
 
-        <div class="skill-form">
-          <input type="hidden" id="skillId">
-          <div class="skill-form-header">
-            <div class="skill-form-title" id="skill-form-title">Create / Update Skill</div>
+          <div class="section-actions">
+            <button class="ghost-btn" id="restore-skills-btn" type="button">Restore Built-in Skills</button>
           </div>
 
-          <div class="skill-form-grid">
-            <div class="field">
-              <label for="skillName">Skill Name</label>
-              <input type="text" id="skillName" placeholder="Internal policy - Wealth Management">
+          <div class="skills-list" id="skills-list"></div>
+
+          <div class="skill-form">
+            <input type="hidden" id="skillId">
+            <div class="skill-form-header">
+              <div class="skill-form-title" id="skill-form-title">Create / Update Skill</div>
             </div>
+
+            <div class="skill-form-grid">
+              <div class="field">
+                <label for="skillName">Skill Name</label>
+                <input type="text" id="skillName" placeholder="Internal policy - Wealth Management">
+              </div>
+              <div class="field">
+                <label for="skillType">Skill Type</label>
+                <select id="skillType">
+                  <option value="policy">Policy</option>
+                  <option value="law">Law</option>
+                </select>
+              </div>
+            </div>
+
             <div class="field">
-              <label for="skillType">Skill Type</label>
-              <select id="skillType">
-                <option value="policy">Policy</option>
-                <option value="law">Law</option>
-              </select>
+              <label for="skillSummary">Short Summary</label>
+              <input type="text" id="skillSummary" placeholder="Applied to outbound emails for US retail investors.">
+            </div>
+
+            <div class="field">
+              <label>Apply on Matching Jurisdictions</label>
+              <div class="checkbox-grid" id="skill-jurisdictions"></div>
+              <p class="hint">Leave all jurisdictions empty and turn on "Always include" for a global internal policy.</p>
+            </div>
+
+            <div class="field">
+              <label for="skillContent">Skill Content</label>
+              <textarea id="skillContent" spellcheck="false" placeholder="Write the actual compliance rules the AI must enforce."></textarea>
+            </div>
+
+            <div class="field inline-checks">
+              <label><input type="checkbox" id="skillEnabled" checked> Enabled</label>
+              <label><input type="checkbox" id="skillAlwaysApply" checked> Always include</label>
+            </div>
+
+            <div class="skill-form-actions">
+              <button class="save-btn" id="skill-save-btn" type="button">Add Skill</button>
+              <button class="ghost-btn" id="skill-cancel-btn" type="button">Clear Form</button>
             </div>
           </div>
-
-          <div class="field">
-            <label for="skillSummary">Short Summary</label>
-            <input type="text" id="skillSummary" placeholder="Applied to outbound emails for US retail investors.">
-          </div>
-
-          <div class="field">
-            <label>Apply on Matching Jurisdictions</label>
-            <div class="checkbox-grid" id="skill-jurisdictions"></div>
-            <p class="hint">Leave all jurisdictions empty and turn on “Always include” for a global internal policy.</p>
-          </div>
-
-          <div class="field">
-            <label for="skillContent">Skill Content</label>
-            <textarea id="skillContent" spellcheck="false" placeholder="Write the actual compliance rules the AI must enforce."></textarea>
-          </div>
-
-          <div class="field inline-checks">
-            <label><input type="checkbox" id="skillEnabled" checked> Enabled</label>
-            <label><input type="checkbox" id="skillAlwaysApply" checked> Always include</label>
-          </div>
-
-          <div class="skill-form-actions">
-            <button class="save-btn" id="skill-save-btn" type="button">Add Skill</button>
-            <button class="ghost-btn" id="skill-cancel-btn" type="button">Clear Form</button>
-          </div>
         </div>
       </div>
-    </div>
 
-    <div class="section">
-      <div class="section-title">Behavior</div>
+      <div class="section">
+        <div class="section-title">Behavior</div>
 
-      <div class="toggle-row">
-        <div class="toggle-info">
-          <strong>Auto-scan after typing pause</strong>
-          <span>When the user stops typing, the compose window is analysed automatically.</span>
+        <div class="toggle-row">
+          <div class="toggle-info">
+            <strong>Auto-scan after typing pause</strong>
+            <span>When the user stops typing, the compose window is analysed automatically.</span>
+          </div>
+          <label class="toggle">
+            <input type="checkbox" id="autoScan">
+            <span class="toggle-slider"></span>
+          </label>
         </div>
-        <label class="toggle">
-          <input type="checkbox" id="autoScan">
-          <span class="toggle-slider"></span>
-        </label>
+
+        <div class="toggle-row">
+          <div class="toggle-info">
+            <strong>Show panel on scan</strong>
+            <span>Display the draggable analysis panel when a scan completes.</span>
+          </div>
+          <label class="toggle">
+            <input type="checkbox" id="showPanel" checked>
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
       </div>
 
-      <div class="toggle-row">
-        <div class="toggle-info">
-          <strong>Show panel on scan</strong>
-          <span>Display the draggable analysis panel when a scan completes.</span>
-        </div>
-        <label class="toggle">
-          <input type="checkbox" id="showPanel" checked>
-          <span class="toggle-slider"></span>
-        </label>
+      <div class="btn-row">
+        <button class="save-btn" id="save-btn" type="button">Save Settings</button>
+        <span class="saved-msg" id="saved-msg">✓ Settings saved</span>
       </div>
-    </div>
 
-    <div class="btn-row">
-      <button class="save-btn" id="save-btn" type="button">Save Settings</button>
-      <span class="saved-msg" id="saved-msg">✓ Settings saved</span>
-    </div>
+    </div><!-- /panel-settings -->
+
+    <!-- ── Subscription panel ── -->
+    <div class="tab-panel hidden" id="panel-subscription">
+
+      <div class="section sub-hero">
+        <div class="sub-hero-text">
+          <div class="section-title">Subscription</div>
+          <p class="sub-lead">Unlock unlimited scans, priority support, and all future compliance skills.</p>
+        </div>
+        <div class="sub-status-wrap" id="sub-status-wrap">
+          <div class="sub-status sub-status-active" id="sub-status-badge">Active — Test</div>
+        </div>
+      </div>
+
+      <div class="pricing-grid">
+
+        <div class="pricing-card pricing-card-featured">
+          <div class="pricing-badge">Best value</div>
+          <div class="pricing-plan">Annual</div>
+          <div class="pricing-amount">
+            <span class="pricing-currency">€</span>
+            <span class="pricing-number">899<span class="pricing-cents">.99</span></span>
+          </div>
+          <div class="pricing-period">per year · billed once</div>
+          <div class="pricing-saving">Save €100 vs monthly</div>
+          <ul class="pricing-features">
+            <li>Unlimited email scans</li>
+            <li>All compliance skill packs</li>
+            <li>Priority support</li>
+            <li>Early access to new features</li>
+          </ul>
+          <button class="sub-btn sub-btn-primary" id="sub-annual-btn" type="button">Subscribe — €899.99 / year</button>
+        </div>
+
+        <div class="pricing-card">
+          <div class="pricing-plan">Monthly</div>
+          <div class="pricing-amount">
+            <span class="pricing-currency">€</span>
+            <span class="pricing-number">83<span class="pricing-cents">.33</span></span>
+          </div>
+          <div class="pricing-period">per month · billed monthly</div>
+          <div class="pricing-saving">€999.99 / year total</div>
+          <ul class="pricing-features">
+            <li>Unlimited email scans</li>
+            <li>All compliance skill packs</li>
+            <li>Standard support</li>
+            <li>Cancel anytime</li>
+          </ul>
+          <button class="sub-btn sub-btn-secondary" id="sub-monthly-btn" type="button">Subscribe — €83.33 / month</button>
+        </div>
+
+      </div>
+
+      <div class="section">
+        <div class="section-title">License Key</div>
+        <div class="field">
+          <label for="licenseKey">License Key</label>
+          <div class="input-with-btn">
+            <input type="text" id="licenseKey" placeholder="WISE-XXXX-XXXX-XXXX" spellcheck="false" autocomplete="off">
+            <button class="ghost-btn" id="verify-license-btn" type="button">Verify</button>
+          </div>
+          <p class="hint" id="license-hint">Enter the license key you received after subscribing.</p>
+        </div>
+      </div>
+
+    </div><!-- /panel-subscription -->
+
   </div>
 
   <script src="../background/system-prompt.js"></script>

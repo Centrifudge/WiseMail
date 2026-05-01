@@ -10,11 +10,10 @@
  * Depends on: system-prompt.js, skills-library.js, api.js (loaded first by manifest)
  */
 
-const DEFAULT_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent";
-const DEFAULT_MODEL = "gemini-3.1-flash-lite-preview";
+const DEFAULT_ENDPOINT = "https://generativelanguage.googleapis.com/v1/models/{model}:generateContent";
+const DEFAULT_MODEL = "gemini-3.1-flash-lite";
 
 const LEGACY_MODEL_ALIASES = {
-  "gemini-3.1-flash-lite": "gemini-3.1-flash-lite-preview",
   "gemini-3-flash": "gemini-3-flash-preview",
 };
 
@@ -388,7 +387,24 @@ async function analyzeEmail(
 
     return response;
   } catch (error) {
-    return { error: "NETWORK_ERROR", message: error.message };
+    // Strip the API key from the endpoint before surfacing it to the UI
+    const safeEndpoint = endpoint
+      .replace(/([?&])key=[^&]*/g, "$1key=…")
+      .replace(/([?&])api_key=[^&]*/g, "$1api_key=…");
+
+    if (error.name === "AbortError") {
+      return {
+        error: "NETWORK_ERROR",
+        message: `The ${provider} API did not respond within ${FETCH_TIMEOUT_MS / 1000}s — it may be overloaded. Try again in a moment.`,
+        hint: "If timeouts persist, try switching to a faster model in Settings.",
+      };
+    }
+
+    return {
+      error: "NETWORK_ERROR",
+      message: `Could not reach the ${provider} API.`,
+      hint: `Check your internet connection and the endpoint URL in Settings.\n\nEndpoint: ${safeEndpoint}`,
+    };
   }
 }
 

@@ -1,11 +1,11 @@
 const PROVIDER_DEFAULTS = {
-  google: "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+  google: "https://generativelanguage.googleapis.com/v1/models/{model}:generateContent",
   openai: "https://api.openai.com/v1/chat/completions",
   anthropic: "https://api.anthropic.com/v1/messages",
   custom: "",
 };
 
-const DEFAULT_MODEL = "gemini-3.1-flash-lite-preview";
+const DEFAULT_MODEL = "gemini-3.1-flash-lite";
 const DEFAULT_SYSTEM_PROMPT =
   globalThis.WISEMAIL_DEFAULT_SYSTEM_PROMPT ||
   globalThis.WISEMAIL_SYSTEM_PROMPT ||
@@ -25,11 +25,12 @@ const JURISDICTIONS = Array.isArray(globalThis.WISEMAIL_JURISDICTION_OPTIONS)
     ];
 
 const LEGACY_MODEL_ALIASES = {
-  "gemini-3.1-flash-lite": "gemini-3.1-flash-lite-preview",
   "gemini-3-flash": "gemini-3-flash-preview",
 };
 
 const PROVIDER_FOR_MODEL = {
+  "gemini-3.1-flash-lite": "google",
+  "gemini-3.1-pro": "google",
   "gemini-3.1-flash-lite-preview": "google",
   "gemini-3.1-pro-preview": "google",
   "gemini-3-flash-preview": "google",
@@ -288,7 +289,87 @@ async function saveAllSettings(message = "✓ Settings saved") {
   flashSavedMessage(message);
 }
 
+function initPageTabs() {
+  const nav = document.getElementById("page-tabs");
+  const panels = {
+    settings: document.getElementById("panel-settings"),
+    subscription: document.getElementById("panel-subscription"),
+  };
+
+  nav.addEventListener("click", (event) => {
+    const tab = event.target.closest(".page-tab");
+    if (!tab) return;
+    const target = tab.dataset.tab;
+    nav.querySelectorAll(".page-tab").forEach((btn) => {
+      btn.classList.toggle("active", btn.dataset.tab === target);
+      btn.setAttribute("aria-selected", String(btn.dataset.tab === target));
+    });
+    Object.entries(panels).forEach(([key, panel]) => {
+      panel.classList.toggle("hidden", key !== target);
+    });
+  });
+}
+
+async function loadSubscriptionStatus() {
+  const { licenseKey, subscriptionStatus } = await browser.storage.local.get([
+    "licenseKey",
+    "subscriptionStatus",
+  ]);
+
+  if (licenseKey) {
+    document.getElementById("licenseKey").value = licenseKey;
+  }
+
+  const badge = document.getElementById("sub-status-badge");
+  if (subscriptionStatus === "expired") {
+    badge.textContent = "Expired";
+    badge.className = "sub-status sub-status-expired";
+  } else {
+    // Default to test subscription when no paid plan is active
+    const isTest = !subscriptionStatus || subscriptionStatus === "test";
+    badge.textContent = isTest ? "Active — Test" : "Active";
+    badge.className = "sub-status sub-status-active";
+  }
+}
+
+function initSubscriptionHandlers() {
+  document.getElementById("sub-annual-btn").addEventListener("click", () => {
+    browser.tabs.create({ url: "https://wisemail.app/subscribe?plan=annual" });
+  });
+
+  document.getElementById("sub-monthly-btn").addEventListener("click", () => {
+    browser.tabs.create({ url: "https://wisemail.app/subscribe?plan=monthly" });
+  });
+
+  document.getElementById("verify-license-btn").addEventListener("click", async () => {
+    const key = document.getElementById("licenseKey").value.trim();
+    const hint = document.getElementById("license-hint");
+    const badge = document.getElementById("sub-status-badge");
+
+    if (!key) {
+      hint.textContent = "Please enter a license key.";
+      hint.style.color = "#f87171";
+      return;
+    }
+
+    // TODO: replace with real fetch once backend is live
+    await browser.storage.local.set({
+      licenseKey: key,
+      subscriptionStatus: "active",
+      subscriptionPlan: "unknown",
+    });
+    badge.textContent = "Active";
+    badge.className = "sub-status sub-status-active";
+    hint.textContent = "License key saved.";
+    hint.style.color = "#4ade80";
+  });
+}
+
 document.addEventListener("DOMContentLoaded", async () => {
+  initPageTabs();
+  await loadSubscriptionStatus();
+  initSubscriptionHandlers();
+
   populateJurisdictionSelect("jurisdiction");
   populateJurisdictionSelect("counterpartyJurisdiction", { allowEmpty: true });
   renderSkillJurisdictionCheckboxes();

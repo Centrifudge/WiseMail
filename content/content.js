@@ -41,8 +41,11 @@
   let lastFixedText = "";           // Text snapshot right after a fix was applied
   let isAnalyzing = false;
   let panelManualPosition = null;
+  let miniWasDragged = false;
   let composeCloseTimer = null;    // Debounce for compose-close detection
   let backgroundRescanRunning = false;
+
+  const MINI_POS_KEY = "wisemail_mini_pos";
 
   const highlightedIssueSpans = new Map();
   // fileName → { text: string, error: string|null, size: number }
@@ -129,6 +132,56 @@
     return Math.min(Math.max(value, min), max);
   }
 
+  function saveMiniPosition(pos) {
+    try { localStorage.setItem(MINI_POS_KEY, JSON.stringify(pos)); } catch (_) {}
+  }
+
+  function loadMiniPosition() {
+    try { return JSON.parse(localStorage.getItem(MINI_POS_KEY)); } catch (_) { return null; }
+  }
+
+  function applyMiniPosition(mini, pos) {
+    const margin = 8;
+    const maxLeft = Math.max(margin, window.innerWidth  - mini.offsetWidth  - margin);
+    const maxTop  = Math.max(margin, window.innerHeight - mini.offsetHeight - margin);
+    mini.style.left   = `${clamp(pos.left, margin, maxLeft)}px`;
+    mini.style.top    = `${clamp(pos.top,  margin, maxTop)}px`;
+    mini.style.right  = "auto";
+    mini.style.bottom = "auto";
+  }
+
+  function enableMiniDragging(mini) {
+    mini.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) return;
+      const rect = mini.getBoundingClientRect();
+      const offsetX = event.clientX - rect.left;
+      const offsetY = event.clientY - rect.top;
+      let moved = false;
+
+      const onMove = (e) => {
+        moved = true;
+        mini.classList.add("cg-mini-dragging");
+        applyMiniPosition(mini, { left: e.clientX - offsetX, top: e.clientY - offsetY });
+      };
+
+      const onUp = () => {
+        document.removeEventListener("pointermove", onMove);
+        document.removeEventListener("pointerup", onUp);
+        mini.classList.remove("cg-mini-dragging");
+        if (moved) {
+          miniWasDragged = true;
+          const pos = { left: parseFloat(mini.style.left), top: parseFloat(mini.style.top) };
+          saveMiniPosition(pos);
+          panelManualPosition = pos;
+        }
+      };
+
+      document.addEventListener("pointermove", onMove);
+      document.addEventListener("pointerup", onUp);
+      event.preventDefault();
+    });
+  }
+
   // Save the current caret/selection as character offsets relative to a container.
   // Returns null when the selection is outside the container or absent.
   function getSelectionOffsets(container) {
@@ -200,7 +253,10 @@
     panel.style.top = `${safePosition.top}px`;
     panel.style.right = "auto";
     panel.style.bottom = "auto";
-    if (persist) panelManualPosition = safePosition;
+    if (persist) {
+      panelManualPosition = safePosition;
+      saveMiniPosition(safePosition);
+    }
   }
 
   function rectanglesOverlap(a, b) {
@@ -243,6 +299,8 @@
 
   function positionPanel(panel) {
     if (panelManualPosition) { applyPanelPosition(panel, panelManualPosition); return; }
+    const savedMiniPos = loadMiniPosition();
+    if (savedMiniPos) { applyPanelPosition(panel, savedMiniPos); panelManualPosition = savedMiniPos; return; }
     applyPanelPosition(panel, choosePanelPosition(panel));
   }
 
@@ -517,12 +575,14 @@
     range.selectNodeContents(target);
     selection.removeAllRanges();
     selection.addRange(range);
-    const replaced = document.execCommand("insertText", false, replacementText);
-    selection.removeAllRanges();
-    if (replaced || !target.isConnected) return true;
 
-    target.replaceWith(document.createTextNode(replacementText));
-    compose.dispatchEvent(new Event("input", { bubbles: true }));
+    if (!document.execCommand("insertText", false, replacementText)) {
+      target.replaceWith(document.createTextNode(replacementText));
+      compose.dispatchEvent(new InputEvent("input", {
+        bubbles: true, cancelable: true, inputType: "insertText", data: replacementText,
+      }));
+    }
+    selection.removeAllRanges();
     return true;
   }
 
@@ -535,8 +595,18 @@
       if (updated === null) continue;
       clearInlineHighlights();
       compose.focus();
-      document.execCommand("selectAll", false, null);
-      document.execCommand("insertText", false, updated);
+      const range = document.createRange();
+      range.selectNodeContents(compose);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+      if (!document.execCommand("insertText", false, updated)) {
+        compose.textContent = updated;
+        compose.dispatchEvent(new InputEvent("input", {
+          bubbles: true, cancelable: true, inputType: "insertText", data: updated,
+        }));
+      }
+      sel.removeAllRanges();
       return true;
     }
     return false;
@@ -545,6 +615,7 @@
   function appendDisclosureToCompose(text) {
     const compose = getComposeElement();
     if (!compose) return false;
+    const textToAppend = "\n\n" + text;
     compose.focus();
     const sel = window.getSelection();
     const range = document.createRange();
@@ -552,9 +623,13 @@
     range.collapse(false);
     sel.removeAllRanges();
     sel.addRange(range);
-    document.execCommand("insertText", false, "\n\n" + text);
+    if (!document.execCommand("insertText", false, textToAppend)) {
+      compose.textContent += textToAppend;
+      compose.dispatchEvent(new InputEvent("input", {
+        bubbles: true, cancelable: true, inputType: "insertText", data: textToAppend,
+      }));
+    }
     sel.removeAllRanges();
-    compose.dispatchEvent(new Event("input", { bubbles: true }));
     return true;
   }
 
@@ -964,8 +1039,18 @@
     if (compose && body) {
       clearInlineHighlights();
       compose.focus();
-      document.execCommand("selectAll", false, null);
-      document.execCommand("insertText", false, body);
+      const range = document.createRange();
+      range.selectNodeContents(compose);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+      if (!document.execCommand("insertText", false, body)) {
+        compose.textContent = body;
+        compose.dispatchEvent(new InputEvent("input", {
+          bubbles: true, cancelable: true, inputType: "insertText", data: body,
+        }));
+      }
+      sel.removeAllRanges();
       lastAnalyzedText = body;
       lastFixedText = body;
     }
@@ -986,7 +1071,13 @@
       range.collapse(false);
       sel.removeAllRanges();
       sel.addRange(range);
-      document.execCommand("insertText", false, text);
+      if (!document.execCommand("insertText", false, text)) {
+        compose.textContent += text;
+        compose.dispatchEvent(new InputEvent("input", {
+          bubbles: true, cancelable: true, inputType: "insertText", data: text,
+        }));
+      }
+      sel.removeAllRanges();
     }
   }
 
@@ -994,7 +1085,7 @@
 
   function showPanel(state) {
     if (!state.loading) lastPanelState = state;
-    updateMiniDot(getMiniDotStatus(state));
+    removeMini();
     removePanel();
     activePanel = document.createElement("div");
     activePanel.id = "cg-panel";
@@ -1141,7 +1232,13 @@
     const panel = activePanel;
     activePanel = null;
     panel.classList.add("cg-panel-closing");
-    panel.addEventListener("animationend", () => panel.remove(), { once: true });
+    panel.addEventListener("animationend", () => { panel.remove(); restoreMini(); }, { once: true });
+  }
+
+  function restoreMini() {
+    if (!getComposeElement()) return;
+    showMini();
+    if (lastPanelState) updateMiniDot(getMiniDotStatus(lastPanelState));
   }
 
   // ─── Mini-panel ────────────────────────────────────────────────────────────
@@ -1162,7 +1259,7 @@
   }
 
   function showMini() {
-    if (activeMini) return;
+    if (activeMini || activePanel) return;
     const iconUrl = browser.runtime.getURL("icons/icon48.png");
     activeMini = document.createElement("div");
     activeMini.id = "cg-mini";
@@ -1171,16 +1268,21 @@
       <span class="cg-mini-label">WiseMail</span>
       <span class="cg-mini-dot cg-mini-dot-idle"></span>
     `;
+    document.body.appendChild(activeMini);
+
+    const savedPos = loadMiniPosition();
+    if (savedPos) applyMiniPosition(activeMini, savedPos);
+
+    enableMiniDragging(activeMini);
+
     activeMini.addEventListener("click", () => {
-      if (activePanel) {
-        removePanelAnimated();
-      } else if (lastPanelState) {
+      if (miniWasDragged) { miniWasDragged = false; return; }
+      if (lastPanelState) {
         showPanel(lastPanelState);
       } else {
         triggerScan(true);
       }
     });
-    document.body.appendChild(activeMini);
   }
 
   function removeMini() {
@@ -1211,13 +1313,19 @@
 
     // ── Error ────────────────────────────────────────────────────────────────
     if (state.error) {
-      const messages = {
-        NO_API_KEY:    `<p>No API key configured.</p><button id="cg-open-settings" class="cg-settings-link">Open settings →</button>`,
-        EMPTY:         `<p>${state.message}</p>`,
-        API_ERROR:     `<p>API error: ${state.message}</p>`,
-        PARSE_ERROR:   `<p>Unreadable response. Please try again.</p>`,
-        NETWORK_ERROR: `<p>Network error: ${state.message}</p>`,
+      const settingsBtn = `<button id="cg-open-settings" class="cg-settings-link">Open settings →</button>`;
+      const hint = state.hint
+        ? `<p class="cg-error-hint">${state.hint.replace(/\n/g, "<br>")}</p>`
+        : "";
+
+      const bodies = {
+        NO_API_KEY:    `<p>No API key configured.</p>${settingsBtn}`,
+        EMPTY:         `<p>${state.message || "No email content detected."}</p>`,
+        API_ERROR:     `<p class="cg-error-label">API error</p><p>${state.message}</p>${hint}<p class="cg-error-hint">Check that your API key is correct and has sufficient quota.</p>${settingsBtn}`,
+        PARSE_ERROR:   `<p>The AI returned an unreadable response.</p><p class="cg-error-hint">Try again — if this keeps happening, try a different model.</p>`,
+        NETWORK_ERROR: `<p class="cg-error-label">Connection failed</p><p>${state.message}</p>${hint}${settingsBtn}`,
       };
+
       return `
         <div class="cg-header">
           <div class="cg-logo">${logoHTML}</div>
@@ -1225,7 +1333,7 @@
         </div>
         <div class="cg-error">
           <div class="cg-error-icon">⚠</div>
-          ${messages[state.error] || `<p>${state.message}</p>`}
+          ${bodies[state.error] || `<p>${state.message || state.error}</p>`}
         </div>
       `;
     }
